@@ -1,0 +1,137 @@
+<view class="page build-page">
+
+  <!-- 入口切换 -->
+  <view class="tabs">
+    <view class="tab {{tab === 'manual' ? 'tab-active' : ''}}" data-tab="manual" bindtap="onSwitchTab">
+      <text>手工录入</text>
+    </view>
+    <view class="tab {{tab === 'dialog' ? 'tab-active' : ''}}" data-tab="dialog" bindtap="onSwitchTab">
+      <text>对话建表</text>
+    </view>
+  </view>
+
+  <!-- ============ 手工录入 ============ -->
+  <view wx:if="{{tab === 'manual'}}" class="card">
+    <view class="field">
+      <text class="label">课程名称 <text class="required">*</text></text>
+      <input class="input" placeholder="如：高等数学" value="{{form.name}}" data-field="name" bindinput="onInput" />
+    </view>
+
+    <view class="field-row">
+      <view class="field half">
+        <text class="label">教师</text>
+        <input class="input" placeholder="王老师" value="{{form.teacher}}" data-field="teacher" bindinput="onInput" />
+      </view>
+      <view class="field half">
+        <text class="label">地点</text>
+        <input class="input" placeholder="A301" value="{{form.location}}" data-field="location" bindinput="onInput" />
+      </view>
+    </view>
+
+    <view class="field">
+      <text class="label">星期</text>
+      <picker mode="selector" range="{{dayLabels}}" value="{{form.dayIndex}}" bindchange="onPickDay">
+        <view class="picker">{{dayLabels[form.dayIndex]}}</view>
+      </picker>
+    </view>
+
+    <view class="field-row">
+      <view class="field half">
+        <text class="label">开始节次</text>
+        <picker mode="selector" range="{{slotOptions}}" value="{{form.startSlot - 1}}" bindchange="onPickStartSlot">
+          <view class="picker">第 {{form.startSlot}} 节</view>
+        </picker>
+      </view>
+      <view class="field half">
+        <text class="label">连续节数</text>
+        <picker mode="selector" range="{{slotOptions}}" value="{{form.slotCount - 1}}" bindchange="onPickSlotCount">
+          <view class="picker">{{form.slotCount}} 节</view>
+        </picker>
+      </view>
+    </view>
+
+    <view class="field">
+      <text class="label">周次范围</text>
+      <input class="input" placeholder="1-16 或 1-16 单" value="{{form.weeks}}" data-field="weeks" bindinput="onInput" />
+      <text class="hint">支持：1-16 / 1-16 单 / 1-16 双 / 3,5,7 / 1-8,10-16</text>
+    </view>
+
+    <view class="btn btn-primary submit-btn" bindtap="onSubmitManual">添加课程</view>
+  </view>
+
+  <!-- ============ 对话建表 ============ -->
+  <view wx:else>
+    <view class="card">
+      <view class="section-title">一句话说清你的课</view>
+      <textarea
+        class="dialog-input"
+        placeholder="例如：周一三四节高等数学，王老师，A301；周三一二节英语，李老师，B203"
+        value="{{dialogText}}"
+        bindinput="onDialogInput"
+        maxlength="500"
+        auto-height
+      ></textarea>
+      <view class="dialog-actions">
+        <view class="btn btn-ghost dialog-btn" bindtap="onUseExample">用示例</view>
+        <view class="btn btn-primary dialog-btn" bindtap="onParse">{{parsing ? '解析中…' : '开始解析'}}</view>
+      </view>
+      <view wx:if="{{parseError}}" class="parse-error">{{parseError}}</view>
+    </view>
+
+    <!-- 待确认列表 -->
+    <view wx:if="{{parsed.length}}" class="card">
+      <view class="section-title">解析结果（{{parsed.length}} 门），确认后写入</view>
+      <view class="parsed-item" wx:for="{{parsed}}" wx:key="index">
+        <view class="parsed-head">
+          <text class="parsed-index">#{{index + 1}}</text>
+          <view class="parsed-remove" data-idx="{{index}}" bindtap="onRemoveParsed">移除</view>
+        </view>
+
+        <view class="field">
+          <text class="label">课程名</text>
+          <input class="input" value="{{item.name}}" data-idx="{{index}}" data-field="name" bindinput="onEditParsed" placeholder="待补充" />
+        </view>
+
+        <view class="field-row">
+          <view class="field half">
+            <text class="label">星期</text>
+            <input class="input" type="number" value="{{item.day_of_week}}" data-idx="{{index}}" data-field="day_of_week" bindinput="onEditParsed" placeholder="1-7" />
+          </view>
+          <view class="field half">
+            <text class="label">开始节次</text>
+            <input class="input" type="number" value="{{item.start_slot}}" data-idx="{{index}}" data-field="start_slot" bindinput="onEditParsed" placeholder="1-6" />
+          </view>
+        </view>
+
+        <view class="field-row">
+          <view class="field half">
+            <text class="label">连续节数</text>
+            <input class="input" type="number" value="{{item.slot_count}}" data-idx="{{index}}" data-field="slot_count" bindinput="onEditParsed" />
+          </view>
+          <view class="field half">
+            <text class="label">周次</text>
+            <input class="input" value="{{item.weeks}}" data-idx="{{index}}" data-field="weeks" bindinput="onEditParsed" />
+          </view>
+        </view>
+
+        <view class="field-row">
+          <view class="field half">
+            <text class="label">教师</text>
+            <input class="input" value="{{item.teacher}}" data-idx="{{index}}" data-field="teacher" bindinput="onEditParsed" placeholder="—" />
+          </view>
+          <view class="field half">
+            <text class="label">地点</text>
+            <input class="input" value="{{item.location}}" data-idx="{{index}}" data-field="location" bindinput="onEditParsed" placeholder="—" />
+          </view>
+        </view>
+
+        <view wx:if="{{item.missing_fields.length}}" class="missing-tag">
+          待补充：{{item.missing_fields}}
+        </view>
+      </view>
+
+      <view class="btn btn-primary submit-btn" bindtap="onConfirmParsed">确认并写入课表</view>
+    </view>
+  </view>
+
+</view>

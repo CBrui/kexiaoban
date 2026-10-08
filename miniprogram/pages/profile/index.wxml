@@ -1,0 +1,114 @@
+<view class="page profile-page">
+
+  <!-- 用户卡片 -->
+  <view class="card user-card">
+    <view class="avatar">
+      <text>{{profile.nickname ? profile.nickname[0] : '我'}}</text>
+    </view>
+    <view class="user-info">
+      <text class="user-name">{{profile.nickname || '未设置昵称'}}</text>
+      <text class="user-sub">{{profile.college || '未填写院系'}} {{profile.major ? '· ' + profile.major : ''}}</text>
+    </view>
+  </view>
+
+  <!-- 邀请码 -->
+  <view class="card">
+    <view class="section-title">我的邀请码</view>
+    <view class="invite-row">
+      <text class="invite-code">{{profile.invite_code || '——'}}</text>
+      <view class="btn btn-ghost copy-btn" bindtap="onCopyInvite">复制</view>
+    </view>
+    <text class="hint">把邀请码发给同学，对方输入后即可与你比对空闲时间</text>
+  </view>
+
+  <!-- 数据概览 -->
+  <view class="card">
+    <view class="section-title">数据概览</view>
+    <view class="stat-row">
+      <view class="stat-item">
+        <text class="stat-num">{{courseCount}}</text>
+        <text class="stat-label">课程数</text>
+      </view>
+      <view class="stat-item">
+        <text class="stat-num">20</text>
+        <text class="stat-label">总周次</text>
+      </view>
+      <view class="stat-item">
+        <text class="stat-num">12</text>
+        <text class="stat-label">每日节次</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 个人资料 -->
+  <view class="card">
+    <view class="row-between">
+      <view class="section-title" style="margin-bottom:0">个人资料</view>
+      <view class="edit-toggle" bindtap="onToggleEdit">{{editMode ? '取消' : '编辑'}}</view>
+    </view>
+
+    <view wx:if="{{editMode}}" class="edit-area">
+      <view class="field">
+        <text class="label">昵称</text>
+        <input class="input" value="{{form.nickname}}" data-field="nickname" bindinput="onInput" />
+      </view>
+      <view class="field">
+        <text class="label">院系</text>
+        <input class="input" value="{{form.college}}" data-field="college" bindinput="onInput" />
+      </view>
+      <view class="field">
+        <text class="label">专业</text>
+        <input class="input" value="{{form.major}}" data-field="major" bindinput="onInput" />
+      </view>
+      <view class="field">
+        <text class="label">班级</text>
+        <input class="input" value="{{form.class_name}}" data-field="class_name" bindinput="onInput" />
+      </view>
+      <view class="btn btn-primary" bindtap="onSaveProfile">保存</view>
+    </view>
+
+    <view wx:else class="info-list">
+      <view class="info-row">
+        <text class="info-label">昵称</text>
+        <text class="info-value">{{profile.nickname || '—'}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">院系</text>
+        <text class="info-value">{{profile.college || '—'}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">专业</text>
+        <text class="info-value">{{profile.major || '—'}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">班级</text>
+        <text class="info-value">{{profile.class_name || '—'}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 功能入口 -->
+  <view class="card">
+    <view class="menu-row" bindtap="onGoSchedule">
+      <text class="menu-text">节次设置（上午 / 下午 / 晚间）</text>
+      <text class="menu-arrow">›</text>
+    </view>
+    <view class="menu-row" bindtap="onGoReminder">
+      <text class="menu-text">提醒与免打扰设置</text>
+      <text class="menu-arrow">›</text>
+    </view>
+    <view class="menu-row" bindtap="onGoBuild">
+      <text class="menu-text">新增课程</text>
+      <text class="menu-arrow">›</text>
+    </view>
+    <view class="menu-row" bindtap="onRetry">
+      <text class="menu-text">重新登录 / 同步</text>
+      <text class="menu-arrow">›</text>
+    </view>
+    <view class="menu-row" bindtap="onClearLocal">
+      <text class="menu-text menu-danger">清空本地数据</text>
+      <text class="menu-arrow">›</text>
+    </view>
+  </view>
+
+</view>

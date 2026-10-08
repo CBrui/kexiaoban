@@ -1,0 +1,60 @@
+<view class="page match-page">
+
+  <!-- 输入区 -->
+  <view class="card">
+    <view class="section-title">输入对方邀请码</view>
+    <view class="code-row">
+      <input
+        class="code-input"
+        placeholder="6 位邀请码"
+        value="{{inviteCode}}"
+        bindinput="onInputCode"
+        maxlength="6"
+      />
+      <view class="btn btn-primary align-btn" bindtap="onAlign">{{loading ? '计算中…' : '开始对齐'}}</view>
+    </view>
+
+    <view class="range-row">
+      <view class="range-item">
+        <text class="range-label">起床节次</text>
+        <picker mode="selector" range="{{slotOptions}}" value="{{wakeSlot - 1}}" bindchange="onPickWake">
+          <view class="picker small">第 {{wakeSlot}} 节</view>
+        </picker>
+      </view>
+      <view class="range-item">
+        <text class="range-label">就寝节次</text>
+        <picker mode="selector" range="{{slotOptions}}" value="{{sleepSlot - 1}}" bindchange="onPickSleep">
+          <view class="picker small">第 {{sleepSlot}} 节</view>
+        </picker>
+      </view>
+    </view>
+    <text class="hint">起床/就寝节次用于裁掉你不参与的时段，让结果更实用</text>
+  </view>
+
+  <!-- 兜底提示 -->
+  <view wx:if="{{tip}}" class="tip-box tip-{{tipType}}">
+    <text class="tip-text">{{tip}}</text>
+    <view wx:if="{{tipType === 'empty'}}" class="tip-action" bindtap="onGoBuild">去建我的课表</view>
+    <view wx:if="{{tipType === 'error'}}" class="tip-action" bindtap="onRetry">重试</view>
+  </view>
+
+  <!-- 结果区 -->
+  <view wx:if="{{result.length}}" class="card">
+    <view class="section-title">共同空闲（{{resultCount}} 个周次）</view>
+    <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
+      <view class="week-group-head">
+        <text class="week-badge">第 {{group.week}} 周</text>
+      </view>
+      <view class="slot-line" wx:for="{{group.slots}}" wx:for-item="slot" wx:key="index">
+        <text class="slot-day">{{slot.dayLabel}}</text>
+        <text class="slot-time">{{slot.text}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 未搜索且无结果时的引导 -->
+  <view wx:if="{{!searched}}" class="empty-tip">
+    <text>输入同学邀请码，看看你们什么时候都有空</text>
+  </view>
+
+</view>

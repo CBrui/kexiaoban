@@ -1,0 +1,113 @@
+<view class="page reminder-page">
+
+  <!-- 全局开关与提前量 -->
+  <view class="card">
+    <view class="row-between">
+      <view>
+        <text class="row-title">全局提醒</text>
+        <text class="row-desc">关闭后所有提醒静默</text>
+      </view>
+      <switch checked="{{config.globalMute}}" color="#f53f3f" bindchange="onToggleMute" />
+    </view>
+
+    <view class="divider"></view>
+
+    <view class="row-between">
+      <view>
+        <text class="row-title">提前提醒时间</text>
+        <text class="row-desc">上课前多久推送</text>
+      </view>
+      <picker mode="selector" range="{{leadOptions}}" value="{{leadIndex}}" bindchange="onPickLead">
+        <view class="picker mini">{{config.leadMinutes}} 分钟</view>
+      </picker>
+    </view>
+  </view>
+
+  <!-- 优先级图示（答辩重点） -->
+  <view class="card">
+    <view class="section-title">不提醒判定优先级</view>
+    <text class="priority-desc">命中即返回，顺序不可调换。用户能看到「为什么今天没提醒」。</text>
+    <view class="priority-list">
+      <view class="priority-row" wx:for="{{priorityRows}}" wx:key="order">
+        <view class="priority-order">{{item.order}}</view>
+        <view class="priority-body">
+          <text class="priority-cond">{{item.cond}}</text>
+          <text wx:if="{{item.note}}" class="priority-note">{{item.note}}</text>
+        </view>
+        <view class="priority-result {{item.result === '不提醒' ? 'result-silent' : 'result-notify'}}">
+          {{item.result}}
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 自定义不提醒日期 -->
+  <view class="card">
+    <view class="section-title">不提醒日期</view>
+    <view class="add-row">
+      <picker mode="date" value="{{newDate}}" bindchange="onNewDateChange">
+        <view class="picker flex1">{{newDate || '选择日期'}}</view>
+      </picker>
+      <view class="btn btn-ghost add-btn" bindtap="onAddSilentDate">添加</view>
+    </view>
+    <view wx:if="{{config.silentDates.length}}" class="chip-list">
+      <view class="chip" wx:for="{{config.silentDates}}" wx:key="index">
+        <text>{{item}}</text>
+        <text class="chip-x" data-idx="{{index}}" bindtap="onRemoveSilentDate">×</text>
+      </view>
+    </view>
+    <text wx:else class="hint">如考试周、个人请假日期</text>
+  </view>
+
+  <!-- 免打扰时段 -->
+  <view class="card">
+    <view class="section-title">免打扰时段</view>
+    <view class="add-row">
+      <picker mode="time" value="{{newRangeFrom}}" bindchange="onFromChange">
+        <view class="picker time-picker">{{newRangeFrom}}</view>
+      </picker>
+      <text class="dash">—</text>
+      <picker mode="time" value="{{newRangeTo}}" bindchange="onToChange">
+        <view class="picker time-picker">{{newRangeTo}}</view>
+      </picker>
+      <view class="btn btn-ghost add-btn" bindtap="onAddSilentRange">添加</view>
+    </view>
+    <view wx:if="{{config.silentRanges.length}}" class="chip-list">
+      <view class="chip" wx:for="{{config.silentRanges}}" wx:key="index">
+        <text>{{item.from}} - {{item.to}}</text>
+        <text class="chip-x" data-idx="{{index}}" bindtap="onRemoveSilentRange">×</text>
+      </view>
+    </view>
+    <text wx:else class="hint">如午休 12:00-14:00</text>
+  </view>
+
+  <!-- 单课程静默 -->
+  <view class="card">
+    <view class="section-title">单课程提醒开关</view>
+    <view wx:if="{{courses.length}}">
+      <view class="course-row" wx:for="{{courses}}" wx:key="id">
+        <text class="course-row-name">{{item.name}}</text>
+        <switch
+          checked="{{config.silentCourses.indexOf(item.id) !== -1}}"
+          color="#3a7afe"
+          data-id="{{item.id}}"
+          bindchange="onToggleCourseMute"
+        />
+      </view>
+      <text class="hint">开启 = 该课程静音</text>
+    </view>
+    <text wx:else class="hint">还没有课程，先去建表</text>
+  </view>
+
+  <!-- 判定演示 -->
+  <view class="card">
+    <view class="section-title">判定演示</view>
+    <text class="priority-desc">点击验证边界场景的判定结果</text>
+    <view class="demo-actions">
+      <view class="btn btn-ghost demo-btn" bindtap="onDemo">法定节假日场景</view>
+      <view class="btn btn-ghost demo-btn" bindtap="onDemoMakeup">调休补课场景</view>
+    </view>
+    <view wx:if="{{demoResult}}" class="demo-result">{{demoResult}}</view>
+  </view>
+
+</view>

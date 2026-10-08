@@ -1,0 +1,49 @@
+{
+  "pages": [
+    "pages/timetable/index",
+    "pages/build/index",
+    "pages/match/index",
+    "pages/reminder/index",
+    "pages/profile/index",
+    "pages/schedule/index"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTitleText": "课小伴",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f6f8"
+  },
+  "tabBar": {
+    "color": "#8a8f99",
+    "selectedColor": "#3a7afe",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/timetable/index",
+        "text": "课表"
+      },
+      {
+        "pagePath": "pages/build/index",
+        "text": "建表"
+      },
+      {
+        "pagePath": "pages/match/index",
+        "text": "找搭子"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents",
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于展示上课地点相关信息"
+    }
+  }
+}

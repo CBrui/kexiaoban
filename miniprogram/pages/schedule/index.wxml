@@ -1,0 +1,85 @@
+<view class="page schedule-page">
+
+  <!-- 说明 -->
+  <view class="card intro-card">
+    <text class="intro-title">自定义每天的上课节次</text>
+    <text class="intro-desc">高校课程按「大节」上课（一节约 95 分钟），这里调整上午、下午、晚间的节数，课表会自动重算每个大节的时间段。两大节之间的课间也可单独设置。</text>
+  </view>
+
+  <!-- 分段设置 -->
+  <view class="card" wx:for="{{segments}}" wx:key="key" wx:for-item="seg" wx:for-index="idx">
+    <view class="seg-head">
+      <text class="seg-label">{{seg.label}}</text>
+      <view class="seg-counter">
+        <view class="counter-btn" data-idx="{{idx}}" bindtap="onSlotsMinus" hover-class="btn-hover">−</view>
+        <input
+          class="counter-input"
+          type="number"
+          value="{{seg.slots}}"
+          data-idx="{{idx}}"
+          bindinput="onSlotsInput"
+        />
+        <view class="counter-btn" data-idx="{{idx}}" bindtap="onSlotsPlus" hover-class="btn-hover">+</view>
+        <text class="counter-unit">节</text>
+      </view>
+    </view>
+
+    <view class="seg-row">
+      <view class="seg-field">
+        <text class="field-label">第 1 节开始</text>
+        <picker mode="time" value="{{seg.startFirst}}" data-idx="{{idx}}" bindchange="onStartChange">
+          <view class="picker-mini">{{seg.startFirst}}</view>
+        </picker>
+      </view>
+      <view class="seg-field">
+        <text class="field-label">每节时长</text>
+        <picker mode="selector" range="{{durationOptions}}" value="{{seg.durationIndex}}" data-idx="{{idx}}" bindchange="onDurationChange">
+          <view class="picker-mini">{{seg.duration}} 分钟</view>
+        </picker>
+      </view>
+    </view>
+  </view>
+
+  <!-- 课间休息 -->
+  <view class="card">
+    <view class="row-between">
+      <view>
+        <text class="row-title">课间休息</text>
+        <text class="row-desc">两大节之间的间隔时长</text>
+      </view>
+      <view class="inline-input">
+        <input class="mini-input" type="number" value="{{breakWithinSegment}}" bindinput="onBreakInput" />
+        <text class="counter-unit">分钟</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 超界课程提示 -->
+  <view wx:if="{{overflowCount > 0}}" class="overflow-tip">
+    <text class="overflow-title">有 {{overflowCount}} 门课程超出新的节次范围</text>
+    <text class="overflow-desc">保存后将被自动裁剪：</text>
+    <view class="overflow-item" wx:for="{{overflowCourses}}" wx:key="id">
+      <text>{{item.name}}</text>
+      <text class="overflow-meta">第 {{item.start_slot}} 节起，连上 {{item.slot_count}} 节</text>
+    </view>
+  </view>
+
+  <!-- 时间轴预览 -->
+  <view class="card">
+    <view class="section-title">时间轴预览（共 {{totalSlots}} 节）</view>
+    <view class="preview-grid">
+      <view class="preview-item" wx:for="{{preview}}" wx:key="slot">
+        <text class="preview-no">{{item.slot}}</text>
+        <text class="preview-time">{{item.text}}</text>
+      </view>
+    </view>
+    <text wx:if="{{totalSlots === 0}}" class="hint">当前没有任何节次，请至少为一个时段设置节数</text>
+  </view>
+
+  <!-- 操作 -->
+  <view class="actions">
+    <view class="btn btn-ghost action-btn" bindtap="onReset">恢复默认</view>
+    <view class="btn btn-primary action-btn" bindtap="onSave">保存设置</view>
+  </view>
+
+</view>

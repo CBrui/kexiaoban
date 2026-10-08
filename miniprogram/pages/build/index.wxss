@@ -1,0 +1,144 @@
+.build-page {
+  padding-bottom: 60rpx;
+}
+
+/* ---------- 入口切换 ---------- */
+.tabs {
+  display: flex;
+  background: var(--color-surface);
+  border-radius: 16rpx;
+  padding: 8rpx;
+  margin-bottom: 24rpx;
+}
+
+.tab {
+  flex: 1;
+  text-align: center;
+  min-height: 80rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+  color: var(--color-text-secondary);
+  border-radius: 12rpx;
+}
+
+.tab-active {
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+/* ---------- 表单字段 ---------- */
+.field {
+  margin-bottom: 28rpx;
+}
+
+.field-row {
+  display: flex;
+}
+
+.field.half {
+  flex: 1;
+  margin-right: 20rpx;
+}
+
+.field.half:last-child {
+  margin-right: 0;
+}
+
+.label {
+  display: block;
+  font-size: 26rpx;
+  color: var(--color-text-secondary);
+  margin-bottom: 12rpx;
+}
+
+.required {
+  color: var(--color-danger);
+}
+
+.input,
+.picker {
+  height: 84rpx;
+  line-height: 84rpx;
+  background: var(--color-bg);
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  color: var(--color-text);
+  box-sizing: border-box;
+}
+
+.hint {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  margin-top: 10rpx;
+}
+
+.submit-btn {
+  margin-top: 12rpx;
+}
+
+/* ---------- 对话区 ---------- */
+.dialog-input {
+  width: 100%;
+  min-height: 200rpx;
+  background: var(--color-bg);
+  border-radius: 12rpx;
+  padding: 24rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+
+.dialog-actions {
+  display: flex;
+  margin-top: 24rpx;
+}
+
+.dialog-btn {
+  flex: 1;
+  margin: 0 8rpx;
+}
+
+.parse-error {
+  margin-top: 20rpx;
+  font-size: 26rpx;
+  color: #a3202b;
+  background: #fff1f0;
+  border-radius: 12rpx;
+  padding: 20rpx 24rpx;
+}
+
+/* ---------- 解析结果 ---------- */
+.parsed-item {
+  border: 1rpx solid var(--color-border);
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 24rpx;
+}
+
+.parsed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16rpx;
+}
+
+.parsed-index {
+  font-size: 26rpx;
+  color: var(--color-text-tertiary);
+}
+
+.parsed-remove {
+  font-size: 24rpx;
+  color: var(--color-danger);
+  padding: 8rpx 16rpx;
+}
+
+.missing-tag {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #a35b00;
+  background: #fff7e8;
+  border-radius: 8rpx;
+  padding: 10rpx 16rpx;
+}

@@ -1,0 +1,149 @@
+<view class="page timetable-page">
+
+  <!-- 错误提示 -->
+  <view wx:if="{{error}}" class="error-bar">
+    <text>{{error}}</text>
+    <view class="error-retry" bindtap="onRetry">重试</view>
+  </view>
+
+  <!-- 空数据引导 -->
+  <view wx:if="{{!loading && !hasAnyCourse}}" class="empty-tip">
+    <text class="empty-title">还没有课程</text>
+    <text class="empty-desc">用一句话或一张截图，快速生成你的课表</text>
+    <view class="btn btn-primary empty-btn" bindtap="onGoBuild">去建表</view>
+  </view>
+
+  <!-- 课表网格 -->
+  <view wx:else class="grid-wrap">
+
+    <!-- 表头：角格 + 星期（固定，不参与滑动） -->
+    <view class="grid-header">
+      <view class="corner-cell" bindtap="onOpenWeekPicker" hover-class="corner-hover">
+        <text class="corner-week">第{{weekBadge.week}}周</text>
+        <text class="corner-parity">{{weekBadge.parity}}</text>
+      </view>
+
+      <view wx:for="{{dayLabels}}" wx:key="*this" class="day-head">
+        <text class="day-name">{{item}}</text>
+        <text class="day-date">{{dayDates[index]}}</text>
+      </view>
+    </view>
+
+    <!-- 主体：可左右滑动切换周次 -->
+    <view
+      class="grid-body"
+      bindtouchstart="onTouchStart"
+      bindtouchmove="onTouchMove"
+      bindtouchend="onTouchEnd"
+      bindtouchcancel="onTouchCancel"
+    >
+      <!-- 节次列（仅首屏测量一次宽度，不参与滑动） -->
+      <view class="slot-col">
+        <block wx:for="{{slotAxis}}" wx:key="index">
+          <view wx:if="{{item.type === 'slot'}}" class="slot-cell" style="height: {{slotH}}px;">
+            <text class="slot-no">{{item.slot}}</text>
+            <text class="slot-range">{{item.start}}</text>
+            <text class="slot-range">{{item.end}}</text>
+          </view>
+          <view wx:else class="slot-break" style="height: {{breakH}}px;">
+            <text class="slot-break-label">{{item.label}}</text>
+          </view>
+        </block>
+      </view>
+
+      <!-- 可滑动区域：7 天 × 节次 -->
+      <view class="swipe-viewport">
+        <view
+          class="day-cols {{animate ? 'day-cols-animate' : ''}}"
+          style="transform: translate3d({{offset}}px, 0, 0);"
+        >
+          <view wx:for="{{grid}}" wx:for-item="dayCol" wx:for-index="dayIdx" wx:key="dayIdx" class="day-col">
+            <block wx:for="{{dayCol}}" wx:for-item="cell" wx:for-index="rowIdx" wx:key="rowIdx">
+              <!-- 休息分隔行 -->
+              <view wx:if="{{cell && cell.isBreak}}" class="break-cell" style="height: {{breakH}}px;"></view>
+
+              <!-- 普通节次格 -->
+              <view wx:else class="grid-cell" style="height: {{slotH}}px;">
+                <view
+                  wx:if="{{cell && !cell.placeholder}}"
+                  class="course-block"
+                  style="height: {{cell.span * slotH - 4}}px; background: {{cell.bg}}; border-left-color: {{cell.color}};"
+                  data-course="{{cell}}"
+                  bindtap="onTapCourse"
+                >
+                  <text class="course-name" style="color: {{cell.color}};">{{cell.name}}</text>
+                  <text wx:if="{{cell.location}}" class="course-loc">{{cell.location}}</text>
+                </view>
+              </view>
+            </block>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 底部操作 -->
+    <view class="grid-footer">
+      <text class="swipe-hint">左右滑动切换周次</text>
+      <text class="footer-link" bindtap="onGoScheduleSetting">节次设置</text>
+    </view>
+  </view>
+
+  <!-- 周次选择面板 -->
+  <view wx:if="{{showWeekPicker}}" class="mask" bindtap="onCloseWeekPicker">
+    <view class="week-panel" catchtap="noop">
+      <view class="week-panel-head">
+        <text class="week-panel-title">选择周次</text>
+        <text class="week-panel-close" bindtap="onCloseWeekPicker">关闭</text>
+      </view>
+      <scroll-view class="week-panel-scroll" scroll-y>
+        <view class="week-panel-grid">
+          <view
+            wx:for="{{weeks}}"
+            wx:key="week"
+            class="week-chip {{item.week === currentWeek ? 'week-chip-active' : ''}}"
+            data-week="{{item.week}}"
+            bindtap="onSwitchWeek"
+          >
+            <text class="week-chip-no">{{item.week}}</text>
+            <text class="week-chip-parity">{{item.parity}}</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <!-- 课程详情卡片 -->
+  <view wx:if="{{detail}}" class="mask" bindtap="onCloseDetail">
+    <view class="detail-card" catchtap="noop">
+      <view class="detail-head" style="border-left-color: {{detail.color}};">
+        <text class="detail-name">{{detail.name}}</text>
+        <text class="detail-source">{{detail.source_type}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">时间</text>
+        <text class="detail-value">{{detail.weekText}} · {{detail.slotText}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">节次</text>
+        <text class="detail-value">{{detail.timeText}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">周次</text>
+        <text class="detail-value">{{detail.weeksText}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">教师</text>
+        <text class="detail-value">{{detail.teacher || '—'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">地点</text>
+        <text class="detail-value">{{detail.location || '—'}}</text>
+      </view>
+      <view class="detail-actions">
+        <view class="btn btn-ghost detail-btn" bindtap="onCloseDetail">关闭</view>
+        <view class="btn detail-btn detail-btn-danger" bindtap="onDeleteCourse">删除</view>
+      </view>
+    </view>
+  </view>
+
+</view>
