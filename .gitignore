@@ -12,3 +12,9 @@ $RECYCLE.BIN/
 
 # Node.js
 node_modules/
+
+# 微信开发者工具：个人本地配置（每人一份，不参与协作）
+project.private.config.json
+miniprogram/project.private.config.json
+.idea/
+.vscode/
