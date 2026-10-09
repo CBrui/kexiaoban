@@ -9,6 +9,7 @@
  * 若调用方明确传入 timetableId，则以传入的为准。
  */
 const { getClient, getMode } = require('./client');
+const { withIds } = require('./doc');
 const store = require('./store');
 const timetableApi = require('./timetable');
 
@@ -40,7 +41,7 @@ async function listCourses(timetableId) {
       .where({ timetable_id: tid })
       .orderBy('created_at', 'asc')
       .get();
-    return res.data || [];
+    return withIds(res.data);
   }
 
   const rows = await store.select(TABLE);
@@ -131,7 +132,7 @@ async function listCoursesByOwner(ownerId) {
   if (getMode() === 'cloud') {
     const db = getClient().database();
     const res = await db.collection(TABLE).where({ _openid: String(ownerId) }).get();
-    return res.data || [];
+    return withIds(res.data);
   }
   return store.select(TABLE, { owner_id: ownerId });
 }

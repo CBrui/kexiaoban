@@ -25,6 +25,7 @@
  *   3. 首次使用时自动创建「默认课表」，并把历史课程（无 timetable_id）迁移过来
  */
 const { getClient, getMode } = require('./client');
+const { withIds } = require('./doc');
 const store = require('./store');
 const config = require('../config');
 
@@ -78,7 +79,8 @@ async function listTimetables() {
   if (getMode() === 'cloud') {
     const db = getClient().database();
     const res = await db.collection(TABLE).orderBy('created_at', 'asc').get();
-    return res.data || [];
+    // 云文档主键是 _id，统一补成 id 供上层按 id 使用（否则 doc(t.id) 会报 docId must not be empty）
+    return withIds(res.data);
   }
   const rows = await store.select(TABLE);
   return rows.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
@@ -262,7 +264,7 @@ async function listCoursesOf(timetableId) {
       .where({ timetable_id: String(timetableId) })
       .orderBy('created_at', 'asc')
       .get();
-    return res.data || [];
+    return withIds(res.data);
   }
   const rows = await store.select(COURSE_TABLE);
   return rows
@@ -328,7 +330,7 @@ async function migrateOrphanCourses(timetableId) {
   if (done) return 0;
 
   const all = getMode() === 'cloud'
-    ? ((await getClient().database().collection(COURSE_TABLE).get()).data || [])
+    ? withIds((await getClient().database().collection(COURSE_TABLE).get()).data)
     : await store.select(COURSE_TABLE);
 
   const orphans = all.filter((c) => c.timetable_id == null);

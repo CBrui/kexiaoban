@@ -207,6 +207,22 @@ courses
 | 当前指针自动转移 | 删掉当前课表后，指针挪到剩余第一张；无剩余则清空缓存 |
 | 首张课表自动设为当前 | `addTimetable()` 检测到是唯一一张时自动 `setCurrent` |
 | 总周次与日期校验 | `clampTotalWeeks()` 夹紧到 `[1, 30]`；`normalizeTermStart()` 校验 `YYYY-MM-DD`，非法则回退 config |
+| **云 / 本地主键归一化** | `api/doc.js` 的 `withId(s)` 把云文档的 `_id` 补成 `id`（见下） |
+
+### 云 / 本地双模式的主键差异（重要踩坑）
+
+云端文档主键是 **`_id`**，本地存储（`api/store.js`）用的是 **`id`**。上层业务代码统一按 `id` 使用，所以**每一处「从云端读回来的记录」都必须先经过 `api/doc.js` 归一化**：
+
+```js
+const { withIds } = require('./doc');
+// 云端分支
+return withIds(res.data);   // 给每条文档补上 id = _id
+```
+
+**漏掉会怎样**：`record.id` 变成 `undefined`，紧接着 `db.collection('timetables').doc(t.id)` 会抛
+`Error: collection.doc:fail -1 . docId must not be empty` —— 症状是**本地模式一切正常、切到云就写不进去**，而且本地单元测试跑不出来（本地记录本来就有 `id`）。
+
+**涉及位置**：`api/timetable.js`（`listTimetables` / `listCoursesOf` / `migrateOrphanCourses`）、`api/course.js`（`listCourses` / `listCoursesByOwner`）。回归用例见 `test/run.js` 的【34】。
 
 ### 数据迁移（幂等）
 
