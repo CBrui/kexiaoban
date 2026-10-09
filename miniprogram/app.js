@@ -30,12 +30,22 @@ App({
   /**
    * 登录链路：微信登录 → 换取用户会话 → 确保档案存在
    * 完成后把 openid 与 profile 写入 globalData
+   *
+   * 注意：owner_id 是登录身份的规范化字段，由 api/profile.js 的
+   * ensureProfile() 统一保证存在（云模式下取平台写入的 _openid，
+   * 本地模式下取自生成的模拟身份）。这里再兜一层 _openid / _id，
+   * 避免任何一个环节漏填时 openid 变成 undefined 传到「找搭子」。
    */
   async checkLogin() {
     try {
       const profile = await ensureProfile();
       this.globalData.user = profile;
-      this.globalData.openid = profile ? profile.owner_id : null;
+      this.globalData.openid = profile
+        ? (profile.owner_id || profile._openid || profile.id || null)
+        : null;
+      if (!this.globalData.openid) {
+        console.warn('[app] 未取得用户标识 owner_id，部分协作功能（找搭子）将不可用');
+      }
     } catch (err) {
       console.error('[app] 登录失败', err);
       // 登录失败不阻断页面渲染，由页面给出重试入口

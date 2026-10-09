@@ -36,14 +36,17 @@ Page({
 
   async loadFriends() {
     const user = app.globalData.user;
-    if (!user) return;
+    // owner_id 是「找搭子」的前提，由 api/profile.js 的 ensureProfile 规范化保证；
+    // 拿不到就跳过（登录失败时不阻断页面渲染）
+    if (!user || !user.owner_id) {
+      console.warn('[match] 尚未取得用户标识（owner_id），跳过好友列表加载');
+      return;
+    }
     try {
       const rels = await listFriends(user.owner_id);
-      const friends = [];
-      for (const r of rels) {
-        const p = await findByInviteCode(''); // 占位：真实场景按 owner_id 查档案
-        friends.push({ owner_id: r.friend_owner_id });
-      }
+      const friends = (rels || [])
+        .filter((r) => r && r.friend_owner_id)
+        .map((r) => ({ owner_id: r.friend_owner_id }));
       this.setData({ friends });
     } catch (e) {
       console.error('[match] 加载同学列表失败', e);
@@ -79,14 +82,21 @@ Page({
         return;
       }
 
+      // 1.1 对方档案必须带身份标识，否则后续无法取课程
+      if (!friendProfile.owner_id) {
+        console.error('[match] 对方档案缺少身份标识（owner_id / _openid）', friendProfile);
+        this.setData({ tip: '对方账号信息异常，暂时无法比对', tipType: 'error' });
+        return;
+      }
+
       const user = app.globalData.user;
       if (user && friendProfile.owner_id === user.owner_id) {
         this.setData({ tip: '不能和自己找搭子哦', tipType: 'error' });
         return;
       }
 
-      // 2. 建立绑定关系（单向）
-      if (user) {
+      // 2. 建立绑定关系（单向）。绑定失败不影响本次查询，仅记录告警
+      if (user && user.owner_id) {
         try {
           await bindFriend(user.owner_id, friendProfile.owner_id);
         } catch (e) {
