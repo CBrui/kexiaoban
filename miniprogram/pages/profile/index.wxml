@@ -93,10 +93,6 @@
 
   <!-- 功能入口 -->
   <view class="card">
-    <view class="menu-row" bindtap="onGoTimetableManage">
-      <text class="menu-text">课表管理（新建 / 切换 / 开课时间）</text>
-      <text class="menu-arrow">›</text>
-    </view>
     <view class="menu-row" bindtap="onGoSchedule">
       <text class="menu-text">节次设置（上午 / 下午 / 晚间）</text>
       <text class="menu-arrow">›</text>

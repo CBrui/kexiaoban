@@ -53,11 +53,11 @@ Page({
     totalWeeks: config.DEFAULT_TOTAL_WEEKS || 20,
     weeks: [],
 
-    // 当前课表（多课表支持）：名称、开课日期、总周次都来自这张课表自身
+    // 当前课表（多课表支持）：开课日期、总周次都来自这张课表自身
+    // timetableName 仍保留：用于「课表被改名」时的变化检测（页面上不再展示课表名）
     timetableId: null,
     timetableName: '',
     termStartMonday: config.TERM_START_MONDAY,
-    termRangeText: '',   // 如 "9月7日 - 1月24日"
     noTimetable: false,  // 一张课表都没有时的空态（正常情况下 ensureDefaultTimetable 会兜底）
 
     // 当前周描述
@@ -167,8 +167,7 @@ Page({
         timetableId: tt.id,
         timetableName: tt.name,
         termStartMonday: tt.term_start_monday,
-        totalWeeks,
-        termRangeText: this.formatTermRange(tt)
+        totalWeeks
       });
       return tt;
     } catch (err) {
@@ -176,17 +175,6 @@ Page({
       this.setData({ noTimetable: true });
       return null;
     }
-  },
-
-  /**
-   * 「第 1 周周一 ~ 最后一周周日」的展示文本，用于底部状态栏
-   */
-  formatTermRange(tt) {
-    const end = timetableApi.endDateOf(tt);
-    if (!end) return '';
-    const start = new Date(tt.term_start_monday);
-    const fmt = (d) => `${d.getMonth() + 1}月${d.getDate()}日`;
-    return `${fmt(start)} - ${fmt(end)}`;
   },
 
   /**
@@ -247,7 +235,6 @@ Page({
         timetableName: tt.name,
         termStartMonday: tt.term_start_monday,
         totalWeeks,
-        termRangeText: this.formatTermRange(tt),
         noTimetable: false,
         todayWeek: pos.week,
         todayDow: pos.dayOfWeek,
@@ -973,13 +960,6 @@ Page({
 
   onGoBuild() {
     wx.switchTab({ url: '/pages/build/index' });
-  },
-
-  /**
-   * 点课表名称 → 进「课表管理」（新建 / 切换 / 改开课时间与周次）
-   */
-  onGoTimetableManage() {
-    wx.navigateTo({ url: '/pages/timetable-manage/index' });
   },
 
   /**
