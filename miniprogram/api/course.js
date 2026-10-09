@@ -116,23 +116,31 @@ async function removeCourse(id) {
 
 /**
  * 读取指定朋友的课程（用于找搭子）
- * 云模式下通过 relations 表校验关系后读取
  *
  * 注意 1：这里不按 timetable_id 过滤 —— 朋友的课表 id 与本地无关，
  *         找搭子关心的是「对方全部课程造成的占用」，跨课表合并才符合语义。
  *
- * 注意 2：身份字段在两种模式下不同名 ——
- *         本地模式课程记录带 owner_id（我们自己写的）；
- *         云模式课程记录的归属由平台写入的 _openid 标记，文档里并没有 owner_id。
- *         传进来的 ownerId 是 normalizeProfile 规范化后的身份（云模式下即 _openid），
- *         因此云端必须按 _openid 查，否则永远查不到对方的课表。
+ * 注意 2：云模式下**必须走云函数**（findBuddy 的 getCourses 动作）。
+ *         courses 集合是「仅创建者可读写」(PRIVATE)，客户端直查
+ *         `where({ _openid })` 读不到别人的课程、只会返回空 ——
+ *         这正是云模式下「找搭子」失效的根因。云函数具备管理端权限，
+ *         并会先校验调用者与对方已建立 relations 关系后才返回课程。
+ *
+ * 注意 3：传进来的 ownerId 是 normalizeProfile 规范化后的身份
+ *         （云模式下即对方的 _openid），云函数据此定位对方课程。
  */
 async function listCoursesByOwner(ownerId) {
   if (!ownerId) return [];
   if (getMode() === 'cloud') {
-    const db = getClient().database();
-    const res = await db.collection(TABLE).where({ _openid: String(ownerId) }).get();
-    return withIds(res.data);
+    const res = await getClient().callFunction({
+      name: 'findBuddy',
+      data: { action: 'getCourses', friendOwnerId: String(ownerId) }
+    });
+    const r = (res && res.result) || null;
+    if (!r || !r.ok) {
+      throw new Error('读取对方课程失败：' + ((r && r.message) || (r && r.error) || '未知错误'));
+    }
+    return withIds(r.courses || []);
   }
   return store.select(TABLE, { owner_id: ownerId });
 }

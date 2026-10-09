@@ -178,9 +178,17 @@ async function findByInviteCode(code) {
   if (!normalized) return null;
 
   if (getMode() === 'cloud') {
-    const db = getClient().database();
-    const res = await db.collection(TABLE).where({ invite_code: normalized }).get();
-    return normalizeProfile((res.data && res.data[0]) || null);
+    // profiles 是「仅创建者可读写」(PRIVATE)，客户端直查只能读到自己的档案，
+    // 按邀请码找不到同学 → 必须走云函数（服务端管理权限）跨用户查询。
+    const res = await getClient().callFunction({
+      name: 'findBuddy',
+      data: { action: 'findProfile', inviteCode: normalized }
+    });
+    const r = (res && res.result) || null;
+    if (!r || !r.ok) {
+      throw new Error('查询同学失败：' + ((r && r.message) || (r && r.error) || '未知错误'));
+    }
+    return normalizeProfile(r.profile || null);
   }
   const rows = await store.select(TABLE, { invite_code: normalized });
   return normalizeProfile(rows[0] || null);

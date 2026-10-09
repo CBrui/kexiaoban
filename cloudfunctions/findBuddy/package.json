@@ -1,0 +1,9 @@
+{
+  "name": "findBuddy",
+  "version": "1.0.0",
+  "description": "找搭子：按邀请码查同学档案 / 校验关系后读取对方课程（绕过 PRIVATE 集合权限）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

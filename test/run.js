@@ -517,6 +517,80 @@ const storeApi = require(path.join(M, 'api/store'));
     return src.id === undefined;
   })());
 
+  /* ============ 35. 找搭子走云函数（云模式） ============ */
+  // courses / profiles 都是「仅创建者可读写」(PRIVATE)。云模式下按邀请码找同学、
+  // 读对方课程若走客户端直查只会得到空 → 必须走云函数 findBuddy（服务端管理权限）。
+  // 该类问题本地模式跑不出来，必须显式覆盖云分支。
+  group('【35】找搭子走云函数（云模式）');
+
+  const cloudCalls = [];
+  global.wx.cloud = {
+    init() {},
+    database() {
+      throw new Error('云模式下找搭子不应再走客户端直查');
+    },
+    callFunction({ name, data }) {
+      cloudCalls.push({ name, data });
+      if (data.action === 'findProfile') {
+        if (data.inviteCode === 'NOPE00') {
+          return Promise.resolve({ result: { ok: true, profile: null } });
+        }
+        return Promise.resolve({
+          result: { ok: true, profile: { owner_id: 'oFRIEND', nickname: '小明' } }
+        });
+      }
+      if (data.action === 'getCourses') {
+        if (data.friendOwnerId === 'oSTRANGER') {
+          return Promise.resolve({
+            result: { ok: false, error: 'NO_RELATION', message: '尚未与该同学建立关系' }
+          });
+        }
+        return Promise.resolve({
+          result: {
+            ok: true,
+            courses: [
+              { _id: 'c1', name: '高等数学', day_of_week: 1, start_slot: 1, slot_count: 2, weeks: '1-16' }
+            ]
+          }
+        });
+      }
+      return Promise.resolve({ result: { ok: false, error: 'UNKNOWN_ACTION' } });
+    }
+  };
+
+  const clientApi = require(path.join(M, 'api/client'));
+  const courseApi = require(path.join(M, 'api/course'));
+  const profileApi = require(path.join(M, 'api/profile'));
+  clientApi.initClient({ useCloud: true, envId: 'test-env' });
+  eq('客户端已切到云模式', clientApi.getMode(), 'cloud');
+
+  const found = await profileApi.findByInviteCode('abc123');
+  let lastCall = cloudCalls[cloudCalls.length - 1];
+  eq('按邀请码找同学走云函数', lastCall.name, 'findBuddy');
+  eq('动作为 findProfile', lastCall.data.action, 'findProfile');
+  eq('邀请码已归一化为大写', lastCall.data.inviteCode, 'ABC123');
+  eq('返回同学档案带 owner_id', found && found.owner_id, 'oFRIEND');
+
+  const notFound = await profileApi.findByInviteCode('nope00');
+  eq('邀请码查不到 → 返回 null', notFound, null);
+
+  const friendCourses = await courseApi.listCoursesByOwner('oFRIEND');
+  lastCall = cloudCalls[cloudCalls.length - 1];
+  eq('读对方课程走云函数', lastCall.name, 'findBuddy');
+  eq('动作为 getCourses', lastCall.data.action, 'getCourses');
+  eq('云函数收到对方身份', lastCall.data.friendOwnerId, 'oFRIEND');
+  eq('课程记录补上 id（_id 归一化）', friendCourses[0].id, 'c1');
+  eq('课程内容正确', friendCourses[0].name, '高等数学');
+
+  let relationErr = '';
+  try {
+    await courseApi.listCoursesByOwner('oSTRANGER');
+  } catch (e) {
+    relationErr = String((e && e.message) || e);
+  }
+  ok('未建立关系时抛出可读错误（不再静默返回空）',
+    relationErr.indexOf('NO_RELATION') >= 0 || relationErr.indexOf('尚未') >= 0);
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);
