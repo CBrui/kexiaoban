@@ -7,10 +7,10 @@
  */
 module.exports = {
   // 云开发环境 ID（在微信开发者工具「云开发 - 设置 - 环境ID」查看）
-  CLOUD_ENV_ID: 'your-cloud-env-id',
+  CLOUD_ENV_ID: 'kexiaoban-d6gwihpzhf7c3752e',
 
   // 是否启用真实云服务。false 时数据访问层降级为本地存储，便于无云环境时开发调试。
-  USE_CLOUD: false,
+  USE_CLOUD: true,
 
   // 学期第 1 周周一日期（用于周次 → 日期换算），格式 YYYY-MM-DD
   //

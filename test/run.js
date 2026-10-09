@@ -496,6 +496,27 @@ const storeApi = require(path.join(M, 'api/store'));
   ok('归一化后一定不再是 undefined 身份',
     !!normalizeProfile({ _openid: 'oX' }).owner_id);
 
+  /* ============ 34. 云文档主键归一化（_id → id） ============ */
+  // 云模式专属坑：云端主键叫 _id、本地叫 id，读云文档时必须补 id，
+  // 否则 doc(t.id) 会抛 "docId must not be empty"。本地模式跑不出来，必须显式覆盖。
+  group('【34】云文档 _id → id 归一化');
+  const { withId, withIds } = require(path.join(M, 'api/doc'));
+
+  eq('云文档补上 id = _id', withId({ _id: 'abc', name: 'x' }).id, 'abc');
+  const normedDoc = withId({ _id: 'abc', name: 'x' });
+  ok('原字段完整保留', normedDoc.name === 'x' && normedDoc._id === 'abc');
+  eq('本地记录已有 id，不被 _id 覆盖', withId({ id: 7, _id: 'abc' }).id, 7);
+  eq('既无 id 也无 _id 时 id 为 undefined', withId({ name: 'y' }).id, undefined);
+  eq('空值原样返回(null)', withId(null), null);
+  ok('空值原样返回(undefined)', withId(undefined) === undefined);
+  eq('批量归一化', withIds([{ _id: 'a' }, { _id: 'b' }]).map((d) => d.id).join(','), 'a,b');
+  eq('空数组安全', withIds(undefined).length, 0);
+  ok('不修改原对象（纯函数）', (() => {
+    const src = { _id: 'z' };
+    withId(src);
+    return src.id === undefined;
+  })());
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);
