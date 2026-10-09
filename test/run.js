@@ -373,8 +373,115 @@ eq('startOfDay 抹掉时分秒', formatDate(startOfDay(new Date('2026-10-09T23:5
 eq('currentTimeStr 补零', currentTimeStr(new Date('2026-10-09T08:05:00')), '08:05');
 eq('currentTimeStr 晚间', currentTimeStr(new Date('2026-10-09T19:30:00')), '19:30');
 
-/* ============ 汇总 ============ */
-console.log('\n' + '='.repeat(52));
-console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);
-console.log('='.repeat(52));
-process.exit(failed > 0 ? 1 : 0);
+/* ============ 25. 多课表：数据层 ============ */
+// 多课表测试需要一个「可用的」wx.storage —— 前面的桩把 getStorageSync 固定返回 null，
+// 这里换成内存实现，才能真正跑通 store → timetable 的读写链路。
+const memStore = new Map();
+global.wx.getStorageSync = (k) => (memStore.has(k) ? memStore.get(k) : '');
+global.wx.setStorageSync = (k, v) => { memStore.set(k, v); };
+global.wx.removeStorageSync = (k) => { memStore.delete(k); };
+
+const timetableApi = require(path.join(M, 'api/timetable'));
+const storeApi = require(path.join(M, 'api/store'));
+
+(async () => {
+  group('【25】多课表 —— 校验与边界');
+  eq('总周次下限夹紧', timetableApi.clampTotalWeeks(0), 1);
+  eq('总周次上限夹紧', timetableApi.clampTotalWeeks(999), 30);
+  eq('总周次非法值回退默认', timetableApi.clampTotalWeeks('abc'), 20);
+  eq('总周次字符串数字可用', timetableApi.clampTotalWeeks('18'), 18);
+  eq('总周次小数取整', timetableApi.clampTotalWeeks(16.9), 16);
+
+  group('【26】ensureDefaultTimetable —— 首次创建与幂等');
+  const first = await timetableApi.ensureDefaultTimetable();
+  ok('首次调用创建出课表', !!first && !!first.id);
+  const afterFirst = await timetableApi.listTimetables();
+  eq('首次创建后共 1 张课表', afterFirst.length, 1);
+  eq('默认课表总周次 = 20', first.total_weeks, 20);
+  eq('默认课表开课日期取 config', first.term_start_monday, '2026-09-07');
+  eq('默认课表被标记为当前', !!first.is_current, true);
+
+  const second = await timetableApi.ensureDefaultTimetable();
+  eq('重复调用不新建（幂等）', (await timetableApi.listTimetables()).length, 1);
+  eq('重复调用返回同一张', String(second.id), String(first.id));
+
+  group('【27】历史课程迁移 —— 无 timetable_id 归入默认课表');
+  // 模拟升级前遗留的课程：有数据但没有 timetable_id
+  await storeApi.insert('courses', { name: '高等数学', start_slot: 1, slot_count: 2 });
+  await storeApi.insert('courses', { name: '大学英语', start_slot: 3, slot_count: 1 });
+  // 清掉迁移标记，让 migrateOrphanCourses 重新执行一次
+  memStore.delete('kxb:migrated_multi_timetable');
+
+  const migrated = await timetableApi.ensureDefaultTimetable();
+  const ownedCourses = await timetableApi.listCoursesOf(migrated.id);
+  eq('两门历史课程被迁移过来', ownedCourses.length, 2);
+  ok('迁移后课程带 timetable_id',
+    ownedCourses.every((c) => String(c.timetable_id) === String(migrated.id)));
+
+  group('【28】新建课表与当前课表指针');
+  const t2 = await timetableApi.addTimetable({
+    name: '下学期课表',
+    term_start_monday: '2027-02-22',
+    total_weeks: 18
+  });
+  eq('新建后共 2 张课表', (await timetableApi.listTimetables()).length, 2);
+  eq('非首张不会被自动设为当前', !!t2.is_current, false);
+  eq('当前课表仍是第一张', String((await timetableApi.getCurrentTimetable()).id), String(first.id));
+
+  await timetableApi.setCurrent(t2.id);
+  const nowCurrent = await timetableApi.getCurrentTimetable();
+  eq('切换后当前课表 = 第二张', String(nowCurrent.id), String(t2.id));
+  const allAfterSwitch = await timetableApi.listTimetables();
+  eq('is_current 全局唯一（只有 1 张为 true）',
+    allAfterSwitch.filter((t) => t.is_current).length, 1);
+
+  group('【29】按课表隔离课程');
+  await storeApi.insert('courses', {
+    name: '线性代数', start_slot: 1, slot_count: 1, timetable_id: String(t2.id)
+  });
+  const t1Courses = await timetableApi.listCoursesOf(first.id);
+  const t2Courses = await timetableApi.listCoursesOf(t2.id);
+  eq('第一张课表仍有 2 门', t1Courses.length, 2);
+  eq('第二张课表有 1 门', t2Courses.length, 1);
+  eq('第二张课表课程数统计', await timetableApi.countCoursesOf(t2.id), 1);
+  ok('两张课表课程不互相污染',
+    !t2Courses.some((c) => c.name === '高等数学') &&
+    !t1Courses.some((c) => c.name === '线性代数'));
+
+  group('【30】修改课表配置');
+  await timetableApi.updateTimetable(t2.id, { total_weeks: 22, name: '春季学期' });
+  const t2Updated = await timetableApi.getTimetable(t2.id);
+  eq('总周次可改', t2Updated.total_weeks, 22);
+  eq('名称可改', t2Updated.name, '春季学期');
+  eq('开课日期未被误改', t2Updated.term_start_monday, '2027-02-22');
+
+  await timetableApi.updateTimetable(t2.id, { total_weeks: 999 });
+  eq('修改时同样夹紧上限', (await timetableApi.getTimetable(t2.id)).total_weeks, 30);
+
+  group('【31】结束日期换算');
+  const t1Now = await timetableApi.getTimetable(first.id);
+  eq('第 20 周周日 = 开课后 139 天',
+    formatDate(timetableApi.endDateOf(t1Now)), '2027-01-24');
+  eq('第 1 周周日 = 开课后 6 天',
+    formatDate(timetableApi.endDateOf({ term_start_monday: '2026-09-07', total_weeks: 1 })),
+    '2026-09-13');
+
+  group('【32】删除课表 —— 级联删课程与指针转移');
+  const beforeDel = (await timetableApi.listCoursesOf(t2.id)).length;
+  eq('删除前第二张课表有 1 门课程', beforeDel, 1);
+  const delResult = await timetableApi.removeTimetable(t2.id);
+  eq('返回一并删除的课程数', delResult.removedCourses, 1);
+  eq('课程确实被删干净', (await timetableApi.listCoursesOf(t2.id)).length, 0);
+  eq('剩余课表数 = 1', (await timetableApi.listTimetables()).length, 1);
+
+  const afterDelCurrent = await timetableApi.getCurrentTimetable();
+  eq('当前指针自动挪到剩余课表', String(afterDelCurrent.id), String(first.id));
+  eq('第一张课表课程未受影响',
+    (await timetableApi.listCoursesOf(first.id)).length, 2);
+
+  /* ============ 汇总 ============ */
+  console.log('\n' + '='.repeat(52));
+  console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);
+  console.log('='.repeat(52));
+  process.exit(failed > 0 ? 1 : 0);
+})();

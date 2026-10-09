@@ -21,21 +21,25 @@
     <text class="hint">把邀请码发给同学，对方输入后即可与你比对空闲时间</text>
   </view>
 
-  <!-- 数据概览 -->
-  <view class="card">
-    <view class="section-title">数据概览</view>
+  <!-- 课表概览 -->
+  <view class="card" bindtap="onGoTimetableManage" hover-class="card-hover">
+    <view class="row-between">
+      <view class="section-title" style="margin-bottom:0">我的课表</view>
+      <text class="edit-toggle">管理 ›</text>
+    </view>
+    <text class="tt-current">{{timetableName || '暂无课表'}}</text>
     <view class="stat-row">
       <view class="stat-item">
         <text class="stat-num">{{courseCount}}</text>
         <text class="stat-label">课程数</text>
       </view>
       <view class="stat-item">
-        <text class="stat-num">20</text>
+        <text class="stat-num">{{totalWeeks}}</text>
         <text class="stat-label">总周次</text>
       </view>
       <view class="stat-item">
-        <text class="stat-num">12</text>
-        <text class="stat-label">每日节次</text>
+        <text class="stat-num">{{timetableCount}}</text>
+        <text class="stat-label">课表张数</text>
       </view>
     </view>
   </view>
@@ -89,6 +93,10 @@
 
   <!-- 功能入口 -->
   <view class="card">
+    <view class="menu-row" bindtap="onGoTimetableManage">
+      <text class="menu-text">课表管理（新建 / 切换 / 开课时间）</text>
+      <text class="menu-arrow">›</text>
+    </view>
     <view class="menu-row" bindtap="onGoSchedule">
       <text class="menu-text">节次设置（上午 / 下午 / 晚间）</text>
       <text class="menu-arrow">›</text>

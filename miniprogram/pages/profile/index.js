@@ -6,11 +6,15 @@
 const app = getApp();
 const { updateProfile } = require('../../api/profile');
 const { listCourses } = require('../../api/course');
+const timetableApi = require('../../api/timetable');
 
 Page({
   data: {
     profile: null,
     courseCount: 0,
+    timetableCount: 0,
+    totalWeeks: 0,
+    timetableName: '',
     loading: true,
     editMode: false,
     form: {
@@ -29,10 +33,18 @@ Page({
     this.setData({ loading: true });
     try {
       const profile = app.globalData.user;
+
+      // 当前课表：课程数、总周次、课表张数都跟随当前课表
+      const current = await timetableApi.getCurrentTimetable();
+      const all = await timetableApi.listTimetables();
       const courses = await listCourses();
+
       this.setData({
         profile,
         courseCount: (courses || []).length,
+        timetableCount: (all || []).length,
+        timetableName: current ? current.name : '',
+        totalWeeks: current ? timetableApi.clampTotalWeeks(current.total_weeks) : 0,
         form: profile
           ? {
               nickname: profile.nickname || '',
@@ -52,6 +64,10 @@ Page({
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  onGoTimetableManage() {
+    wx.navigateTo({ url: '/pages/timetable-manage/index' });
   },
 
   onCopyInvite() {
