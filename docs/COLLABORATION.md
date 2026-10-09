@@ -6,13 +6,19 @@
 
 ## 一、仓库地址
 
-| 远程名 | 地址 | 用途 |
-|---|---|---|
-| `origin` | `https://git.weixin.qq.com/Yu1__/kexiaoban.git` | 微信代码托管（**主力仓库**） |
-| `github` | `https://github.com/CBrui/kexiaoban.git` | GitHub 镜像（默认分支 `main`） |
+本项目**只有一个协作仓库**，就是微信代码托管：
 
-> 主分支是 `master`。GitHub 上 `main` 与 `master` 内容保持一致，网页默认打开 `main`。
-> 日常开发只需用 `origin`，GitHub 由负责人同步。
+```
+https://git.weixin.qq.com/Yu1__/kexiaoban.git
+```
+
+| 项 | 值 |
+|---|---|
+| 远程名 | `origin` |
+| 主分支 | `master` |
+| 托管平台 | 微信代码托管（git.weixin.qq.com） |
+
+> **同事只需操作这一个仓库。** 项目另有 GitHub 镜像仅供负责人备份，与日常开发无关，不需要 clone、不需要配 remote。
 
 ---
 
@@ -20,13 +26,12 @@
 
 ### 1. 拿权限
 
-把你自己的**微信代码托管账号**告诉项目负责人，由负责人在仓库「成员管理」里添加为开发者。
-GitHub 仓库同理，需要负责人邀请为 Collaborator。
+把你自己的**微信代码托管账号**告诉项目负责人，由负责人在仓库「成员管理」里添加为**开发者**。
+（不是微信开发者工具登录的那个账号，是 git.weixin.qq.com 的账号；用微信扫码即可注册登录。）
 
 ### 2. 克隆
 
 ```bash
-# 微信代码托管（推荐）
 git clone https://git.weixin.qq.com/Yu1__/kexiaoban.git
 cd kexiaoban
 
@@ -35,20 +40,16 @@ git config --global user.name  "你的名字"
 git config --global user.email "你的邮箱"
 ```
 
-### 3.（可选）同时挂上 GitHub
+> 首次 `push` 时会提示输入账号密码：**用户名填微信代码托管账号，密码填仓库的「个人访问令牌」**（在 git.weixin.qq.com → 个人设置 → 访问令牌 中生成）。直接输登录密码通常会被拒绝。
 
-```bash
-git remote add github https://github.com/CBrui/kexiaoban.git
-```
-
-### 4. 配置微信开发者工具
+### 3. 配置微信开发者工具
 
 1. 打开**微信开发者工具** → **导入项目** → 选择 `kexiaoban` 目录
 2. AppID 填 `wxcc614b0ea726db2d`（或换你自己的测试 AppID）
 3. **不要**提交 `project.private.config.json` —— 这个文件是每台机器独有的本地编译设置，已在 `.gitignore` 中忽略，工具会自动生成，同事之间不共享
 4. 未配置云环境时，项目自动降级为本地存储模式（`wx.storage`），可直接调试
 
-### 5. 跑一遍测试确认环境正常
+### 4. 跑一遍测试确认环境正常
 
 ```bash
 node test/run.js
@@ -96,8 +97,11 @@ git commit -m "feat(建表): 新增图片识别入口
 # 3. 推送分支（不是 master）
 git push origin feat/你的功能名
 
-# 4. 到微信代码托管网页提「合并请求(Pull Request)」→ 等负责人 review
+# 4. 到微信代码托管网页提「合并请求」→ 等负责人 review 后合并
 ```
+
+> 第 4 步在网页上操作：打开 `https://git.weixin.qq.com/Yu1__/kexiaoban` → 顶部 **「合并请求 / Pull Requests」** → **新建合并请求** → 源分支选你的 `feat/xxx`，目标分支选 `master` → 填写说明 → 提交。
+> 微信代码托管也支持在命令行里直接推 `HEAD:refs/for/master` 触发评审（需开启 Code Review），但**推荐用网页合并请求**，说明更清楚。
 
 ### 提交信息规范
 
@@ -129,6 +133,7 @@ git push origin feat/你的功能名
    - 在开发者工具里自测过页面
    - 提交信息写清改动内容
 4. 合并后删除已合并的远程分支
+5. 建议由负责人在仓库设置里把 `master` 设为**保护分支**，禁止直接推送、禁止强制推送
 
 ---
 
@@ -145,6 +150,9 @@ git checkout feat/xxx && git merge master
 git status
 git diff
 
+# 查看所有远程分支（含同事推上去的）
+git fetch origin && git branch -r
+
 # 撤销本地未提交的改动（谨慎）
 git checkout -- <文件>
 
@@ -158,8 +166,10 @@ git branch -d feat/xxx
 
 | 坑 | 正确做法 |
 |---|---|
-| 直接 push master 造成冲突 | 永远推自己的分支，走 PR |
+| 直接 push master 造成冲突 | 永远推自己的分支，走合并请求 |
 | 提交了 `project.private.config.json` | 已在 `.gitignore` 忽略；若不慎提交，用 `git rm --cached` 移出 |
 | 提交了真实云环境 ID / AppSecret | `.gitignore` 不覆盖配置文件，请勿把密钥写进 `config.js` 后提交 |
 | 分支落后导致冲突一大堆 | 每天开工先 `git pull origin master`，分支上定期 `git merge master` |
-| 改了公共文件（`config.js`、`utils/schedule.js`）没告知 | 在 PR 描述里写明影响范围，避免同事的分支被覆盖 |
+| 改了公共文件（`config.js`、`utils/schedule.js`）没告知 | 在合并请求描述里写明影响范围，避免同事的分支被覆盖 |
+| push 报 403 / 认证失败 | 密码要用「个人访问令牌」，不是登录密码 |
+| 想在 GitHub 上找代码 | 同事不需要看 GitHub，代码以微信代码托管为准 |

@@ -66,18 +66,24 @@ kexiaoban/
 
 ## 协作开发
 
+**唯一的协作仓库是微信代码托管**，所有成员都在这里开发：
+
+```
+origin  https://git.weixin.qq.com/Yu1__/kexiaoban.git   主分支：master
+```
+
 | 远程名 | 地址 | 说明 |
 |---|---|---|
-| `origin` | `https://git.weixin.qq.com/Yu1__/kexiaoban.git` | 微信代码托管，**主力仓库** |
-| `github` | `https://github.com/CBrui/kexiaoban.git` | GitHub 镜像（默认分支 `main`） |
+| `origin` | `https://git.weixin.qq.com/Yu1__/kexiaoban.git` | 微信代码托管，**团队协作仓库（所有人）** |
+| `github` | `https://github.com/CBrui/kexiaoban.git` | GitHub 镜像，**仅负责人备份用，同事无需配置** |
 
 **三条硬规则**：
 
-1. **不允许直接 push `master`** —— 每次开发都新建分支（`feat/`、`fix/`、`chore/`、`refactor/`），推送后用合并请求交给负责人 review
+1. **不允许直接 push `master`** —— 每次开发都新建分支（`feat/`、`fix/`、`chore/`、`refactor/`），推送到 `origin` 后用合并请求交给负责人 review
 2. **提交信息必须写清「修改了什么、添加了什么功能」** —— 推荐 `类型(模块): 标题` + 正文分「新增内容 / 修改内容 / 影响范围」
 3. **`project.private.config.json` 不提交** —— 这是每台机器独有的开发者工具本地配置，已在 `.gitignore` 中忽略
 
-同事首次接入：把微信代码托管账号给负责人加为开发者 → `git clone` 主力仓库 → 微信开发者工具导入 → `node test/run.js` 验证（86 项全通过）。完整步骤见 [docs/COLLABORATION.md](docs/COLLABORATION.md)。
+同事首次接入：把微信代码托管账号给负责人加为开发者 → `git clone` 仓库 → 微信开发者工具导入 → `node test/run.js` 验证（86 项全通过）。完整步骤见 [docs/COLLABORATION.md](docs/COLLABORATION.md)。
 
 ## 核心算法
 
