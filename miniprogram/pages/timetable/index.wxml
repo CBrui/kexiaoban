@@ -102,17 +102,19 @@
       </view>
     </view>
 
-    <!-- 底部操作 -->
+    <!-- 底部操作：仅保留「回到今天」，节次设置已移至「我的」 -->
     <view class="grid-footer">
       <view class="footer-left">
         <text wx:if="{{showNowLine}}" class="now-hint">现在 {{nowLabel}}</text>
         <text wx:elif="{{inTerm}}" class="now-hint">本周 · 第{{todayWeek}}周</text>
         <text wx:else class="now-hint">今天不在学期内</text>
       </view>
-      <view class="footer-right">
-        <view class="footer-btn" bindtap="onBackToToday">回到今天</view>
-        <view class="footer-btn footer-btn-plain" bindtap="onGoScheduleSetting">节次设置</view>
-      </view>
+      <view
+        wx:if="{{inTerm && !isViewingToday}}"
+        class="footer-btn footer-btn-today"
+        bindtap="onBackToToday"
+        hover-class="footer-btn-hover"
+      >回到今天</view>
     </view>
   </view>
 

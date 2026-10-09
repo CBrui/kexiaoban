@@ -35,6 +35,15 @@ const FLING_VELOCITY = 0.5;
 // 当前时间指示线刷新间隔（毫秒）：1 分钟
 const NOW_TICK_INTERVAL = 60 * 1000;
 
+/**
+ * 下一帧执行回调。
+ * 小程序基础库里 canvas 场景才有 requestAnimationFrame，页面里统一用 setTimeout 兜底，
+ * 保证「先写入起始态、再写入动画态」之间存在一次渲染间隔，过渡才会生效。
+ */
+function requestAnimationFrameCompat(fn) {
+  setTimeout(fn, 0);
+}
+
 Page({
   data: {
     currentWeek: 1,
@@ -87,8 +96,15 @@ Page({
   },
 
   onLoad() {
-    // ① 先按「今天」定位到当前周（找不到则退回第 1 周）
-    this.locateToday(true);
+    // 首次进入：直接定位到本周（此时界面尚未呈现，无需动画）
+    const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
+    this.setData({
+      currentWeek: pos.week,
+      todayWeek: pos.week,
+      todayDow: pos.dayOfWeek,
+      inTerm: pos.inTerm
+    });
+
     this.buildWeekList();
     this.refreshSchedule();
     this.syncWeekBadge(this.data.currentWeek);
@@ -111,8 +127,8 @@ Page({
     if (!this.data.loading && app.globalData.ready) {
       this.loadCourses();
     }
-    // 跨天 / 跨周：回来时重新定位一次（例如应用被切到后台过夜）
-    const changed = this.locateToday(false);
+    // 跨天 / 跨周：只刷新定位信息，不改变用户当前浏览的周次
+    const changed = this.locateToday();
     if (changed && this.courses && this.courses.length) {
       this.renderGrid();
     }
@@ -128,42 +144,34 @@ Page({
   },
 
   onPullDownRefresh() {
-    // 下拉时把「今天」重新定位一次，回到本周
-    this.locateToday(true);
-    this.syncWeekBadge(this.data.currentWeek);
-    this.renderGrid();
+    // 下拉只做数据刷新，不改变当前浏览的周次（回到今天请用底部按钮）
     this.loadCourses().then(() => wx.stopPullDownRefresh());
   },
 
   /**
-   * 按「今天」定位到当前周
+   * 刷新「今天」的定位信息（第几周、星期几、是否在学期内）
    *
-   * @param {boolean} force 为 true 时强制跳回本周（首次进入 / 下拉刷新 / 点「回到今天」）；
-   *                        为 false 时只更新定位信息，仅当日期真的跨周了才跟随跳转，
-   *                        避免打断正在翻看其它周的用户
+   * 注意：这个方法**不改变用户当前浏览的周次**。跳回本周由底部「回到今天」按钮
+   * 的 onBackToToday() 负责（那里带翻页动画）。这里只负责把 todayWeek /
+   * todayDow / inTerm 更新到最新，用于表头高亮、今天列底色与指示线判定。
+   *
+   * @returns {boolean} 定位信息是否发生了变化（用于决定是否需要重绘网格）
    */
-  locateToday(force) {
+  locateToday() {
     const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
-    const prevTodayWeek = this.data.todayWeek;
-    const prevTodayDow = this.data.todayDow;
-    const changed = force || pos.week !== prevTodayWeek || pos.dayOfWeek !== prevTodayDow;
+    const changed = pos.week !== this.data.todayWeek ||
+      pos.dayOfWeek !== this.data.todayDow ||
+      pos.inTerm !== this.data.inTerm;
 
-    this.setData({
-      todayWeek: pos.week,
-      todayDow: pos.dayOfWeek,
-      inTerm: pos.inTerm
-    });
-
-    // 是否应该改变用户当前所在周次：
-    //   force                     → 强制回本周
-    //   跨周了 且 用户正看着旧的本周 → 跟随跳转（用户没在看别的周）
-    const wasViewingOldTodayWeek = this.data.currentWeek === prevTodayWeek;
-    if (force || (pos.week !== prevTodayWeek && wasViewingOldTodayWeek)) {
-      this.setData({ currentWeek: pos.week });
+    if (changed) {
+      this.setData({
+        todayWeek: pos.week,
+        todayDow: pos.dayOfWeek,
+        inTerm: pos.inTerm
+      });
+      this.syncWeekBadge(this.data.currentWeek);
+      this.updateNowLine();
     }
-
-    this.syncWeekBadge(this.data.currentWeek);
-    this.updateNowLine();
     return changed;
   },
 
@@ -247,11 +255,13 @@ Page({
   startNowTicker() {
     this.stopNowTicker();
     this._nowTimer = setInterval(() => {
-      // 跨天检测：日期变了要重新定位
+      // 跨天检测：日期变了要刷新定位信息（是否跳周由用户决定）
       const today = formatDate(new Date());
       if (this._lastTodayDate && this._lastTodayDate !== today) {
-        this.locateToday(false);
-        this.renderGrid();
+        const changed = this.locateToday();
+        if (changed && this.courses && this.courses.length) {
+          this.renderGrid();
+        }
       }
       this._lastTodayDate = today;
       this.updateNowLine();
@@ -267,15 +277,89 @@ Page({
   },
 
   /**
-   * 「回到本周并定位今天」快捷操作
+   * 「回到今天」：带动画地跳回本周，并定位到今天所在列
+   *
+   * 动画按「目标周在左还是在右」决定滑动方向，符合直觉：
+   *   - 目标周在当前周之后（往右找）→ 内容向左滑出，目标从右侧滑入
+   *   - 目标周在当前周之前（往左找）→ 内容向右滑出，目标从左侧滑入
+   *   - 已在目标周        → 不切换，只做一次轻微的「强调」回弹
+   *
+   * 跨多周时不逐周播放（那会花很久），而是一次性滑出 + 换数据 + 滑入。
    */
   onBackToToday() {
-    this.locateToday(true);
-    this.syncWeekBadge(this.data.currentWeek);
-    this.renderGrid();
-    this.updateNowLine();
-    if (this.data.inTerm) {
-      wx.showToast({ title: '已回到本周', icon: 'none' });
+    const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
+    const target = pos.week;
+    const current = this.data.currentWeek;
+    const pageWidth = this._pageWidth || 375;
+
+    // 从周次面板点进来时，先收起面板，让动画在干净的界面上播放
+    if (this.data.showWeekPicker) {
+      this.setData({ showWeekPicker: false });
+    }
+
+    // 先把定位信息刷新到最新（可能在后台待了很久）
+    this.setData({
+      todayWeek: pos.week,
+      todayDow: pos.dayOfWeek,
+      inTerm: pos.inTerm
+    });
+
+    // 周次已经正确：只播放一次强调动画，不改数据
+    if (target === current) {
+      this.playEmphasisAnimation();
+      this.syncWeekBadge(current);
+      this.renderGrid();
+      this.updateNowLine();
+      this._toastBackToToday(pos);
+      return;
+    }
+
+    // 目标在右侧（周次更大）→ 内容向左滑出，即 direction = -1
+    const direction = target > current ? -1 : 1;
+    // 跨的周数越多，动画时长略增，但设上限避免拖沓
+    const span = Math.abs(target - current);
+    const slideDuration = Math.min(200 + (span - 1) * 30, 320);
+
+    this.setData({ animate: false, offset: this.data.offset || 0 });
+
+    // 第 1 步：当前内容沿目标方向滑出
+    requestAnimationFrameCompat(() => {
+      this.setData({ animate: true, offset: direction * pageWidth });
+
+      // 第 2 步：换数据 + 无动画归位到反向另一侧
+      setTimeout(() => {
+        this.setData({
+          currentWeek: target,
+          animate: false,
+          offset: -direction * pageWidth
+        });
+        this.syncWeekBadge(target);
+        this.renderGrid();
+
+        // 第 3 步：下一帧滑入居中
+        setTimeout(() => {
+          this.setData({ animate: true, offset: 0 });
+          this.updateNowLine();
+          this._toastBackToToday(pos);
+        }, 20);
+      }, slideDuration);
+    });
+  },
+
+  /**
+   * 「已在今天」时的强调动画：轻微右推再回弹，给用户「已经是这一周了」的反馈
+   */
+  playEmphasisAnimation() {
+    const nudge = 24;
+    this.setData({ animate: true, offset: nudge });
+    setTimeout(() => {
+      this.setData({ offset: 0 });
+    }, 140);
+  },
+
+  _toastBackToToday(pos) {
+    if (pos.inTerm) {
+      wx.showToast({ title: `已回到第${pos.week}周`, icon: 'none' });
     } else {
       wx.showToast({ title: '今天不在学期内', icon: 'none' });
     }
@@ -492,10 +576,6 @@ Page({
 
   onCloseWeekPicker() {
     this.setData({ showWeekPicker: false });
-  },
-
-  onGoScheduleSetting() {
-    wx.navigateTo({ url: '/pages/schedule/index' });
   },
 
   /* ================= 左右滑动切换周（跟手动画） ================= */

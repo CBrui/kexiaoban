@@ -310,6 +310,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16rpx 8rpx 0;
+  min-height: 64rpx;
 }
 
 .footer-left {
@@ -323,24 +324,24 @@
   color: var(--color-text-tertiary);
 }
 
-.footer-right {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
+/* 「回到今天」：仅在查看非本周时出现（条件渲染），避免常驻干扰 */
 .footer-btn {
-  font-size: 22rpx;
-  color: var(--color-primary);
-  padding: 8rpx 16rpx;
-  border-radius: 8rpx;
-  background: var(--color-primary-soft);
-  margin-left: 12rpx;
+  flex-shrink: 0;
+  line-height: 1.2;
 }
 
-.footer-btn-plain {
-  color: var(--color-text-secondary);
-  background: transparent;
+.footer-btn-today {
+  font-size: 24rpx;
+  color: #ffffff;
+  background: var(--color-primary);
+  padding: 12rpx 28rpx;
+  border-radius: 999rpx;
+  box-shadow: 0 2rpx 8rpx rgba(58, 122, 254, 0.28);
+}
+
+.footer-btn-hover {
+  opacity: 0.85;
+  transform: scale(0.97);
 }
 
 /* ---------- 通用遮罩 ---------- */
