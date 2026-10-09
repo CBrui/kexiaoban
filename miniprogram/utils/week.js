@@ -78,7 +78,7 @@ function weekToDate(termStartMonday, week, dayOfWeek) {
 }
 
 /**
- * 日期 → { year, month, day } 格式化
+ * 日期 → "YYYY-MM-DD" 格式化（本地时区，不经过 UTC）
  */
 function formatDate(date) {
   const d = new Date(date);
@@ -86,6 +86,109 @@ function formatDate(date) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * 把任意日期归一到「当天 00:00:00」，消除时分秒对日期差计算的干扰
+ */
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * 两个日期相差的整天数（b - a），按本地日历天计算
+ */
+function daysBetween(a, b) {
+  const ms = startOfDay(b).getTime() - startOfDay(a).getTime();
+  return Math.round(ms / 86400000);
+}
+
+/**
+ * 日期 → 星期几（1=周一 ... 7=周日）
+ * JS 的 getDay() 里 0=周日，需要转换为「周一为一周之始」的编号
+ */
+function weekdayOf(date) {
+  const d = new Date(date);
+  const jsDay = d.getDay(); // 0=周日
+  return jsDay === 0 ? 7 : jsDay;
+}
+
+/**
+ * 今天 → 对应学期的第几周（clamp 到 [1, maxWeek]）
+ *
+ * 算法：用「今天」与「学期第 1 周周一」的整天差算周序号。
+ * 差值为负（学期未开始）时返回 1；超出最大周次时返回 maxWeek。
+ *
+ * @param {string|Date} termStartMonday 学期第 1 周周一日期
+ * @param {Date} [today] 参照日期，默认取当前时间（便于测试注入）
+ * @param {number} [maxWeek] 学期总周数上限
+ * @returns {number} 周次，范围 [1, maxWeek]
+ */
+function currentWeekOf(termStartMonday, today, maxWeek) {
+  const max = Number(maxWeek) > 0 ? Number(maxWeek) : MAX_WEEK;
+  const base = new Date(termStartMonday);
+  if (isNaN(base.getTime())) return 1;
+
+  const now = today ? new Date(today) : new Date();
+  const diff = daysBetween(base, now);
+  if (diff < 0) return 1; // 学期还没开始
+
+  const week = Math.floor(diff / 7) + 1;
+  if (week < 1) return 1;
+  if (week > max) return max; // 学期已结束，停在最后一周
+  return week;
+}
+
+/**
+ * 今天是本学期内的第几天（用于判断「今天」落在哪一列）
+ * 返回值同时给出周次与星期，便于页面直接定位。
+ *
+ * @returns {{ week:number, dayOfWeek:number, inTerm:boolean, date:string }}
+ *          inTerm=false 表示今天不在学期范围内（开学前 / 放假后）
+ */
+function todayPosition(termStartMonday, today, maxWeek) {
+  const max = Number(maxWeek) > 0 ? Number(maxWeek) : MAX_WEEK;
+  const base = new Date(termStartMonday);
+  const now = today ? new Date(today) : new Date();
+
+  if (isNaN(base.getTime())) {
+    return { week: 1, dayOfWeek: weekdayOf(now), inTerm: false, date: formatDate(now) };
+  }
+
+  const diff = daysBetween(base, now);
+  const week = Math.floor(diff / 7) + 1;
+  const inTerm = diff >= 0 && week <= max;
+
+  return {
+    week: inTerm ? week : clampWeek(week, max),
+    dayOfWeek: weekdayOf(now),
+    inTerm,
+    date: formatDate(now)
+  };
+}
+
+function clampWeek(week, max) {
+  if (week < 1) return 1;
+  if (week > max) return max;
+  return week;
+}
+
+/**
+ * 当前时刻 "HH:MM"（用于课表当前时间指示线）
+ */
+function currentTimeStr(date) {
+  const d = date ? new Date(date) : new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * 判断「今天」是否就是给定的 (周次, 星期) —— 用于表头高亮与列高亮
+ */
+function isToday(termStartMonday, week, dayOfWeek, today) {
+  const pos = todayPosition(termStartMonday, today);
+  return pos.inTerm && pos.week === Number(week) && pos.dayOfWeek === Number(dayOfWeek);
 }
 
 /**
@@ -117,5 +220,12 @@ module.exports = {
   weekToDate,
   formatDate,
   formatWeeks,
+  startOfDay,
+  daysBetween,
+  weekdayOf,
+  currentWeekOf,
+  todayPosition,
+  currentTimeStr,
+  isToday,
   MAX_WEEK
 };
