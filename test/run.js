@@ -37,6 +37,7 @@ const { alignFree, alignFreeWithRange, isCounterpartEmpty } = require(path.join(
 const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRange } = require(path.join(M, 'logic/dnd-rule'));
 const { colorOf } = require(path.join(M, 'utils/color'));
 const schedule = require(path.join(M, 'utils/schedule'));
+const { normalizeProfile } = require(path.join(M, 'api/profile'));
 
 let passed = 0;
 let failed = 0;
@@ -478,6 +479,22 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('当前指针自动挪到剩余课表', String(afterDelCurrent.id), String(first.id));
   eq('第一张课表课程未受影响',
     (await timetableApi.listCoursesOf(first.id)).length, 2);
+
+  /* ============ 归一化档案身份（openid 隐患回归） ============ */
+  group('【33】档案身份归一化 normalizeProfile');
+  eq('本地模式：保留已有 owner_id',
+    normalizeProfile({ id: 1, owner_id: 'local-ab12', nickname: '我' }).owner_id, 'local-ab12');
+  eq('云模式：用平台 _openid 补上 owner_id',
+    normalizeProfile({ _id: 'doc1', _openid: 'oABC123', invite_code: 'AAA111' }).owner_id, 'oABC123');
+  eq('云模式：已回填的 owner_id 优先于 _openid',
+    normalizeProfile({ _id: 'doc1', _openid: 'oABC123', owner_id: 'oABC123' }).owner_id, 'oABC123');
+  eq('云端新建档案（无 owner_id / _openid）→ 兜底用 _id',
+    normalizeProfile({ _id: 'doc2', invite_code: 'BBB222' }).owner_id, 'doc2');
+  ok('本地记录（无 _openid）→ 兜底用 id',
+    normalizeProfile({ id: 7 }).owner_id === 7);
+  eq('null 安全', normalizeProfile(null), null);
+  ok('归一化后一定不再是 undefined 身份',
+    !!normalizeProfile({ _openid: 'oX' }).owner_id);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
