@@ -8,6 +8,12 @@
  *   - 节次列显示每节课的完整时间区间（如 08:00-08:45）
  *   - 网格左右滑动切换周次：跟手位移 + 松手回弹/切页动画
  *   - 点击课程块弹出详情卡片
+ *
+ * 滑动实现（关键）：网格渲染为一个「上一周 / 本周 / 下一周」的三面板轨道，
+ * 而不是只渲染当前一周。这样在拖动过程中相邻周的内容是**真实可见**的，
+ * 不会出现「滑出去一半、后面却是空白」的问题。
+ * 位移用轨道自身宽度的百分比表示（一个面板 = 100%），与视口像素宽度无关，
+ * 因此无需等待测量即可精确对齐。
  */
 const { expandAll, findCourseAt } = require('../../logic/course-expand');
 const {
@@ -35,15 +41,11 @@ const MAX_DRAG = 120;
 const FLING_VELOCITY = 0.5;
 // 当前时间指示线刷新间隔（毫秒）：1 分钟
 const NOW_TICK_INTERVAL = 60 * 1000;
-
-/**
- * 下一帧执行回调。
- * 小程序基础库里 canvas 场景才有 requestAnimationFrame，页面里统一用 setTimeout 兜底，
- * 保证「先写入起始态、再写入动画态」之间存在一次渲染间隔，过渡才会生效。
- */
-function requestAnimationFrameCompat(fn) {
-  setTimeout(fn, 0);
-}
+// 切页动画时长（毫秒），必须与 WXSS 中 .track-animate 的 transition 保持一致，
+// 否则「滑出 → 重定基准」的时机对不上，会出现跳动
+const TRANSITION_MS = 240;
+// 一个面板占轨道自身宽度的百分比
+const PANEL_PCT = 100;
 
 Page({
   data: {
@@ -62,11 +64,20 @@ Page({
     weekBadge: { week: 1, parity: '单', label: '第1周 · 单' },
 
     dayLabels: DAY_LABELS,
-    dayDates: [],       // 每天对应日期（如 9月7日），随周次变化
-    dayIsToday: [],     // 每天是否为「今天」，用于表头高亮
     slotAxis: [],
-    grid: [],
     totalSlots: 6,
+
+    /**
+     * 滑动轨道：并排的「上一周 / 本周 / 下一周」面板。
+     *   panels     每个面板含 { week, parity, dayDates, dayIsToday, isTodayWeek, grid }
+     *   trackIndex 当前周在 panels 中的下标
+     *   trackPct   轨道横向位移（百分比，100% = 一个面板宽度）
+     *   animate    是否启用过渡动画（拖动中关闭，松手后开启）
+     */
+    panels: [],
+    trackIndex: 1,
+    trackPct: -PANEL_PCT,
+    animate: true,
 
     // 「今天」定位信息
     todayWeek: 1,       // 今天所在的周次
@@ -91,21 +102,13 @@ Page({
 
     showWeekPicker: false,
 
-    /**
-     * 滑动动画状态
-     *   offset  : 当前横向位移（px），0 表示居中
-     *   animate : 是否启用过渡动画（拖动中关闭，松手后开启）
-     */
-    offset: 0,
-    animate: true,
-
     // 触摸跟踪（不放 data，避免频繁 setData）
     swiping: false
   },
 
   onLoad() {
-    // 多课表：先确定「当前课表」，取它自己的开课日期与总周次。
-    // 首次进入时界面尚未呈现，直接定位到本周，无需动画。
+    // 先把滑动视口宽度的兜底值算出来 —— 拖动时要把像素换算成面板比例
+    this.initPageWidth();
     this.buildWeekList();
     this.refreshSchedule();
 
@@ -117,11 +120,33 @@ Page({
         todayWeek: pos.week,
         todayDow: pos.dayOfWeek,
         inTerm: pos.inTerm
+      }, () => {
+        this.buildWeekList();
+        this.syncWeekBadge(this.data.currentWeek);
+        this.renderTrack();
+        this.loadCourses();
       });
-      this.buildWeekList();
-      this.syncWeekBadge(this.data.currentWeek);
-      this.loadCourses();
     });
+  },
+
+  /**
+   * 兜底估算滑动视口宽度（px）。
+   *
+   * 拖动位移需要把手指移动的像素换算成「面板比例」，因此必须知道视口宽度。
+   * onReady 前的首次渲染先用估算值，onReady 后会被真实的测量值覆盖。
+   */
+  initPageWidth() {
+    try {
+      const info = typeof wx.getWindowInfo === 'function'
+        ? wx.getWindowInfo()
+        : wx.getSystemInfoSync();
+      const winW = info.windowWidth || 375;
+      const slotColW = (108 / 750) * winW;   // .slot-col 宽度 108rpx
+      const wrapPad = (24 / 750) * winW;     // .grid-wrap 左右各 12rpx
+      this._pageWidth = Math.max(1, winW - slotColW - wrapPad);
+    } catch (e) {
+      this._pageWidth = 375;
+    }
   },
 
   /**
@@ -190,10 +215,7 @@ Page({
       this.syncTimetableIfChanged();
     }
     // 跨天 / 跨周：只刷新定位信息，不改变用户当前浏览的周次
-    const changed = this.locateToday();
-    if (changed && this.courses && this.courses.length) {
-      this.renderGrid();
-    }
+    this.locateToday();
     this.startNowTicker();
   },
 
@@ -234,12 +256,12 @@ Page({
         currentWeek: idChanged
           ? pos.week
           : Math.min(this.data.currentWeek, totalWeeks)
+      }, () => {
+        this.buildWeekList();
+        this.syncWeekBadge(this.data.currentWeek);
+        this.renderTrack();
+        this.updateNowLine();
       });
-
-      this.buildWeekList();
-      this.syncWeekBadge(this.data.currentWeek);
-      this.renderGrid();
-      this.updateNowLine();
     } catch (err) {
       console.error('[timetable] 同步课表配置失败', err);
     }
@@ -265,7 +287,7 @@ Page({
    * 的 onBackToToday() 负责（那里带翻页动画）。这里只负责把 todayWeek /
    * todayDow / inTerm 更新到最新，用于表头高亮、今天列底色与指示线判定。
    *
-   * @returns {boolean} 定位信息是否发生了变化（用于决定是否需要重绘网格）
+   * @returns {boolean} 定位信息是否发生了变化（用于决定是否需要重绘）
    */
   locateToday() {
     const pos = this.todayPos();
@@ -280,6 +302,8 @@ Page({
         inTerm: pos.inTerm
       });
       this.syncWeekBadge(this.data.currentWeek);
+      // 今天可能从「相邻面板」变成「当前面板」（或反之），需重建轨道刷新高亮
+      this.renderTrack();
       this.updateNowLine();
     }
     return changed;
@@ -295,7 +319,7 @@ Page({
    *   - 落在休息时段内 → 落在对应的休息行
    *   - 在当天第一节课前 / 最后一节课后 → 显示在最顶部 / 最底部
    *
-   * 只在「当前周次的今天列」显示，翻到别的周时自动隐藏。
+   * 指示线渲染在每个「今天所在周」面板内部，因此翻页时它会随该面板一起滑动。
    */
   updateNowLine() {
     const axis = this.data.slotAxis || [];
@@ -368,10 +392,7 @@ Page({
       // 跨天检测：日期变了要刷新定位信息（是否跳周由用户决定）
       const today = formatDate(new Date());
       if (this._lastTodayDate && this._lastTodayDate !== today) {
-        const changed = this.locateToday();
-        if (changed && this.courses && this.courses.length) {
-          this.renderGrid();
-        }
+        this.locateToday();
       }
       this._lastTodayDate = today;
       this.updateNowLine();
@@ -387,20 +408,16 @@ Page({
   },
 
   /**
-   * 「回到今天」：带动画地跳回本周，并定位到今天所在列
+   * 「回到今天」：带动画地跳回本周
    *
-   * 动画按「目标周在左还是在右」决定滑动方向，符合直觉：
-   *   - 目标周在当前周之后（往右找）→ 内容向左滑出，目标从右侧滑入
-   *   - 目标周在当前周之前（往左找）→ 内容向右滑出，目标从左侧滑入
-   *   - 已在目标周        → 不切换，只做一次轻微的「强调」回弹
-   *
-   * 跨多周时不逐周播放（那会花很久），而是一次性滑出 + 换数据 + 滑入。
+   * 目标在当前位置右侧（周次更大）→ 内容向左滑出、目标从右侧滑入，反之亦然。
+   * 只在目标与当前**相邻**时走「滑一格」；跨多周时用「滑出 → 换轨道 → 从另一侧滑入」三段式，
+   * 避免逐周播放（那会花很久）。
    */
   onBackToToday() {
     const pos = this.todayPos();
     const target = pos.week;
     const current = this.data.currentWeek;
-    const pageWidth = this._pageWidth || 375;
 
     // 从周次面板点进来时，先收起面板，让动画在干净的界面上播放
     if (this.data.showWeekPicker) {
@@ -416,54 +433,55 @@ Page({
 
     // 周次已经正确：只播放一次强调动画，不改数据
     if (target === current) {
-      this.playEmphasisAnimation();
+      this.playEmphasis();
       this.syncWeekBadge(current);
-      this.renderGrid();
+      this.renderTrack();
       this.updateNowLine();
       this._toastBackToToday(pos);
       return;
     }
 
-    // 目标在右侧（周次更大）→ 内容向左滑出，即 direction = -1
-    const direction = target > current ? -1 : 1;
-    // 跨的周数越多，动画时长略增，但设上限避免拖沓
-    const span = Math.abs(target - current);
-    const slideDuration = Math.min(200 + (span - 1) * 30, 320);
+    // 目标在右侧（周次更大）→ 面板下标增大，内容向左滑
+    const s = target > current ? 1 : -1;
 
-    this.setData({ animate: false, offset: this.data.offset || 0 });
+    if (Math.abs(target - current) === 1) {
+      this.slideToAdjacent(s);
+      this._toastBackToToday(pos);
+      return;
+    }
 
-    // 第 1 步：当前内容沿目标方向滑出
-    requestAnimationFrameCompat(() => {
-      this.setData({ animate: true, offset: direction * pageWidth });
+    // 第 1 步：沿目标方向滑出一个面板
+    this.setData({ animate: true, trackPct: -PANEL_PCT * (this.data.trackIndex + s) });
 
-      // 第 2 步：换数据 + 无动画归位到反向另一侧
+    // 第 2 步：换成目标周的轨道，并停在「反向另一侧」
+    setTimeout(() => {
+      const { panels, trackIndex } = this.buildPanels(target);
+      this.setData({
+        currentWeek: target,
+        panels,
+        trackIndex,
+        animate: false,
+        trackPct: -PANEL_PCT * trackIndex + PANEL_PCT * s
+      });
+      this.syncWeekBadge(target);
+      this.updateNowLine();
+
+      // 第 3 步：下一帧滑入居中
       setTimeout(() => {
-        this.setData({
-          currentWeek: target,
-          animate: false,
-          offset: -direction * pageWidth
-        });
-        this.syncWeekBadge(target);
-        this.renderGrid();
-
-        // 第 3 步：下一帧滑入居中
-        setTimeout(() => {
-          this.setData({ animate: true, offset: 0 });
-          this.updateNowLine();
-          this._toastBackToToday(pos);
-        }, 20);
-      }, slideDuration);
-    });
+        this.setData({ animate: true, trackPct: -PANEL_PCT * trackIndex });
+        this._toastBackToToday(pos);
+      }, 20);
+    }, TRANSITION_MS);
   },
 
   /**
    * 「已在今天」时的强调动画：轻微右推再回弹，给用户「已经是这一周了」的反馈
    */
-  playEmphasisAnimation() {
-    const nudge = 24;
-    this.setData({ animate: true, offset: nudge });
+  playEmphasis() {
+    const base = -PANEL_PCT * this.data.trackIndex;
+    this.setData({ animate: true, trackPct: base + 8 });
     setTimeout(() => {
-      this.setData({ offset: 0 });
+      this.setData({ trackPct: base });
     }, 140);
   },
 
@@ -483,11 +501,11 @@ Page({
     this.setData({
       slotAxis: axis,
       totalSlots: getTotalSlots()
+    }, () => {
+      // 行数 / 行结构变了，重建轨道；行高变化由 computeLayout 处理
+      if (this.data.panels && this.data.panels.length) this.renderTrack();
+      if (this._ready) setTimeout(() => this.computeLayout(), 0);
     });
-    if (this._ready) {
-      // 行数变了，重算行高（网格主体高度已缓存）
-      setTimeout(() => this.computeLayout(), 0);
-    }
   },
 
   buildWeekList() {
@@ -500,20 +518,15 @@ Page({
 
   syncWeekBadge(week) {
     const isViewingToday = this.data.inTerm && week === this.data.todayWeek;
+    const parity = week % 2 === 1 ? '单' : '双';
     this.setData({
-      weekBadge: {
-        week,
-        parity: week % 2 === 1 ? '单' : '双',
-        label: `第${week}周 · ${week % 2 === 1 ? '单' : '双'}`
-      },
-      isViewingToday,
-      dayDates: this.computeDayDates(week),
-      dayIsToday: this.computeDayIsToday(week)
+      weekBadge: { week, parity, label: `第${week}周 · ${parity}` },
+      isViewingToday
     });
   },
 
   /**
-   * 计算当前周每天对应的日期文本（如 9月7日）
+   * 计算某周每天对应的日期文本（如 9月7日）
    */
   computeDayDates(week) {
     const list = [];
@@ -525,7 +538,7 @@ Page({
   },
 
   /**
-   * 标记当前周里哪一列是「今天」，用于表头与列高亮
+   * 标记某周里哪一列是「今天」，用于表头与列高亮
    */
   computeDayIsToday(week) {
     const list = [];
@@ -536,63 +549,15 @@ Page({
     return list;
   },
 
-  /**
-   * 计算自适应行高：测量网格主体可用高度，按「节次行 + 休息行(40%)」分配，
-   * 使课表铺满屏幕，而不是固定 104rpx 行高留大片空白。
-   */
-  computeLayout() {
-    const axis = this.data.slotAxis || [];
-    const slotCount = axis.filter((r) => r.type === 'slot').length;
-    const breakCount = axis.filter((r) => r.type === 'break').length;
-    if (slotCount <= 0) return;
-
-    const apply = (gridBodyH) => {
-      const breakRatio = 0.4; // 休息行高度 = 节次行的 40%
-      const slotH = gridBodyH / (slotCount + breakCount * breakRatio);
-      this.setData({
-        slotH: Math.max(30, slotH),
-        breakH: Math.max(16, slotH * breakRatio)
-      });
-      // 行高变化会改变当前时间指示线的位置，需要同步重算
-      this.updateNowLine();
-    };
-
-    if (this._gridBodyH) {
-      apply(this._gridBodyH);
-      return;
-    }
-
-    const query = wx.createSelectorQuery().in(this);
-    query.select('.grid-body').boundingClientRect((rect) => {
-      if (rect && rect.height) {
-        this._gridBodyH = rect.height;
-        if (rect.width) this._pageWidth = rect.width;
-        apply(rect.height);
-      }
-    }).exec();
-  },
-
-  async loadCourses() {
-    this.setData({ loading: true, error: '' });
-    try {
-      const courses = await listCourses();
-      this.courses = courses || [];
-      this.setData({ courseCount: this.courses.length, hasAnyCourse: this.courses.length > 0 });
-      this.renderGrid();
-    } catch (err) {
-      console.error('[timetable] 加载课程失败', err);
-      this.setData({ error: '课表加载失败，请检查网络后重试' });
-    } finally {
-      this.setData({ loading: false });
-    }
-  },
+  /* ================= 周次轨道（上一周 / 本周 / 下一周） ================= */
 
   /**
-   * 渲染当前周的网格
-   * 节次轴元素与网格列一一对应：slot 行放课程，break 行放休息分隔。
+   * 构建某一周的 7 列网格（列内按节次轴逐行放置课程 / 休息 / 空）。
+   *
+   * 与原先的 renderGrid 逻辑等价，只是把「周次」提为参数 ——
+   * 这样上一周 / 本周 / 下一周可以各生成一份，并排放进滑动轨道。
    */
-  renderGrid() {
-    const week = this.data.currentWeek;
+  buildGridForWeek(week) {
     const occupied = expandAll(this.courses);
     const axis = this.data.slotAxis || [];
     const grid = [];
@@ -638,11 +603,197 @@ Page({
       grid.push(col);
     }
 
-    this.setData({ grid });
+    return grid;
+  },
 
-    // 网格首次渲染后测量高度（grid-body 可能在课程加载完成后才出现）
-    if (this._ready && !this._gridBodyH) {
-      setTimeout(() => this.computeLayout(), 0);
+  /**
+   * 组装一个周面板（网格 + 日期表头 + 今天标记）
+   */
+  buildPanel(week) {
+    return {
+      week,
+      parity: week % 2 === 1 ? '单' : '双',
+      dayDates: this.computeDayDates(week),
+      dayIsToday: this.computeDayIsToday(week),
+      isTodayWeek: this.data.inTerm && week === this.data.todayWeek,
+      grid: this.buildGridForWeek(week)
+    };
+  },
+
+  /**
+   * 依据当前周次生成轨道面板数组，并给出当前周在其中的下标。
+   *
+   * 只包含真实存在的周次：第 1 周没有上一周、最后一周没有下一周。
+   * 边界处的「到头了」手感由拖动阻尼提供，而不是渲染一张不存在的空白周。
+   *
+   * @returns {{panels: object[], trackIndex: number}}
+   */
+  buildPanels(week) {
+    const totalWeeks = this.data.totalWeeks;
+    const panels = [];
+    let trackIndex = 0;
+
+    [week - 1, week, week + 1].forEach((w) => {
+      if (w < 1 || w > totalWeeks) return;
+      if (w === week) trackIndex = panels.length;
+      panels.push(this.buildPanel(w));
+    });
+
+    return { panels, trackIndex };
+  },
+
+  /**
+   * 重建轨道并立即归位（无动画）。
+   * 用于数据刷新、配置变更、定位更新等「不需要过渡」的场景。
+   */
+  renderTrack() {
+    const { panels, trackIndex } = this.buildPanels(this.data.currentWeek);
+    this.setData({
+      panels,
+      trackIndex,
+      trackPct: -PANEL_PCT * trackIndex,
+      animate: false
+    });
+  },
+
+  /**
+   * 把轨道滑到相邻一格，动画结束后重定基准（rebase）。
+   *
+   * 为什么需要 rebase：轨道只有三格，滑到下一格后当前周其实在轨道中间，
+   * 需要重建一份以新当前周为中心的轨道，并把位移瞬间归位。
+   * 因为归位前后「屏幕上的画面完全一致」，所以不会有跳动。
+   *
+   * @param {number} delta +1 = 下一周 / -1 = 上一周
+   */
+  slideToAdjacent(delta) {
+    const target = this.data.currentWeek + delta;
+    if (target < 1 || target > this.data.totalWeeks) {
+      this.snapBack();
+      return;
+    }
+
+    // 第 1 步：滑到目标面板
+    this.setData({
+      animate: true,
+      trackPct: -PANEL_PCT * (this.data.trackIndex + delta)
+    });
+
+    // 第 2 步：动画结束后换当前周并重定基准
+    setTimeout(() => {
+      const { panels, trackIndex } = this.buildPanels(target);
+      this.setData({
+        currentWeek: target,
+        panels,
+        trackIndex,
+        trackPct: -PANEL_PCT * trackIndex,
+        animate: false
+      });
+      this.syncWeekBadge(target);
+      this.updateNowLine();
+    }, TRANSITION_MS);
+  },
+
+  /**
+   * 跳到指定周次（周次面板选择 / 上一周 / 下一周按钮共用）。
+   *   - 相邻一周 → 直接滑一格
+   *   - 相距多周 → 沿方向滑出 → 换轨道 → 从另一侧滑入
+   */
+  goToWeek(target) {
+    const current = this.data.currentWeek;
+    if (target < 1 || target > this.data.totalWeeks || target === current) return;
+
+    const s = target > current ? 1 : -1;
+    if (Math.abs(target - current) === 1) {
+      this.slideToAdjacent(s);
+      return;
+    }
+
+    // 第 1 步：沿目标方向滑出一个面板
+    this.setData({ animate: true, trackPct: -PANEL_PCT * (this.data.trackIndex + s) });
+
+    // 第 2 步：换成目标周的轨道，并停在「反向另一侧」
+    setTimeout(() => {
+      const { panels, trackIndex } = this.buildPanels(target);
+      this.setData({
+        currentWeek: target,
+        panels,
+        trackIndex,
+        animate: false,
+        trackPct: -PANEL_PCT * trackIndex + PANEL_PCT * s
+      });
+      this.syncWeekBadge(target);
+      this.updateNowLine();
+
+      // 第 3 步：下一帧滑入居中
+      setTimeout(() => {
+        this.setData({ animate: true, trackPct: -PANEL_PCT * trackIndex });
+      }, 20);
+    }, TRANSITION_MS);
+  },
+
+  /**
+   * 未达翻页阈值时回弹归位
+   */
+  snapBack() {
+    this.setData({ animate: true, trackPct: -PANEL_PCT * this.data.trackIndex });
+  },
+
+  /**
+   * 计算自适应行高：测量网格主体可用高度，按「节次行 + 休息行(40%)」分配，
+   * 使课表铺满屏幕，而不是固定 104rpx 行高留大片空白。
+   * 同时测量滑动视口宽度（拖动位移换算要用）。
+   */
+  computeLayout() {
+    const axis = this.data.slotAxis || [];
+    const slotCount = axis.filter((r) => r.type === 'slot').length;
+    const breakCount = axis.filter((r) => r.type === 'break').length;
+    if (slotCount <= 0) return;
+
+    const apply = (gridBodyH) => {
+      const breakRatio = 0.4; // 休息行高度 = 节次行的 40%
+      const slotH = gridBodyH / (slotCount + breakCount * breakRatio);
+      this.setData({
+        slotH: Math.max(30, slotH),
+        breakH: Math.max(16, slotH * breakRatio)
+      });
+      // 行高变化会改变当前时间指示线的位置，需要同步重算
+      this.updateNowLine();
+    };
+
+    if (this._gridBodyH) {
+      apply(this._gridBodyH);
+      return;
+    }
+
+    const query = wx.createSelectorQuery().in(this);
+    query.select('.grid-body').boundingClientRect();
+    query.select('.swipe-viewport').boundingClientRect();
+    query.exec((res) => {
+      const bodyRect = res && res[0];
+      const viewportRect = res && res[1];
+
+      // 视口宽度 = 一个面板的宽度，拖动位移由它换算
+      if (viewportRect && viewportRect.width) this._pageWidth = viewportRect.width;
+
+      if (bodyRect && bodyRect.height) {
+        this._gridBodyH = bodyRect.height;
+        apply(bodyRect.height);
+      }
+    });
+  },
+
+  async loadCourses() {
+    this.setData({ loading: true, error: '' });
+    try {
+      const courses = await listCourses();
+      this.courses = courses || [];
+      this.setData({ courseCount: this.courses.length, hasAnyCourse: this.courses.length > 0 });
+      this.renderTrack();
+    } catch (err) {
+      console.error('[timetable] 加载课程失败', err);
+      this.setData({ error: '课表加载失败，请检查网络后重试' });
+    } finally {
+      this.setData({ loading: false });
     }
   },
 
@@ -650,34 +801,20 @@ Page({
 
   onSwitchWeek(e) {
     const week = Number(e.currentTarget.dataset.week);
-    if (!week || week === this.data.currentWeek) {
+    if (!week) {
       this.setData({ showWeekPicker: false });
       return;
     }
-    this.setData({ currentWeek: week, showWeekPicker: false });
-    this.syncWeekBadge(week);
-    this.renderGrid();
-    this.updateNowLine();
+    this.setData({ showWeekPicker: false });
+    this.goToWeek(week);
   },
 
   onPrevWeek() {
-    const w = this.data.currentWeek - 1;
-    if (w >= 1) {
-      this.setData({ currentWeek: w });
-      this.syncWeekBadge(w);
-      this.renderGrid();
-      this.updateNowLine();
-    }
+    this.goToWeek(this.data.currentWeek - 1);
   },
 
   onNextWeek() {
-    const w = this.data.currentWeek + 1;
-    if (w <= this.data.totalWeeks) {
-      this.setData({ currentWeek: w });
-      this.syncWeekBadge(w);
-      this.renderGrid();
-      this.updateNowLine();
-    }
+    this.goToWeek(this.data.currentWeek + 1);
   },
 
   onOpenWeekPicker() {
@@ -697,7 +834,7 @@ Page({
     // 记录起点（存实例上，避免频繁 setData）
     this._startX = t.clientX;
     this._startY = t.clientY;
-    this._startOffset = this.data.offset || 0;
+    this._startPct = this.data.trackPct;
     this._startTime = Date.now();
     this._axis = null;      // 'x' 横向 / 'y' 纵向 / null 未定
     this._dragging = false;
@@ -722,27 +859,34 @@ Page({
         this._dragging = true;
       } else {
         this._axis = 'y';
-        this.setData({ animate: true, offset: 0 });
+        this.setData({ animate: true, trackPct: -PANEL_PCT * this.data.trackIndex });
         return;
       }
     }
 
     if (this._axis !== 'x') return;
 
-    let next = this._startOffset + dx;
+    const pageWidth = this._pageWidth || 375;
+    const base = -PANEL_PCT * this.data.trackIndex;
+    let pct = this._startPct + (dx / pageWidth) * PANEL_PCT;
 
-    // 边界阻尼：第一周右滑、最后一周左滑时位移减半
-    const atFirst = this.data.currentWeek <= 1 && next > 0;
-    const atLast = this.data.currentWeek >= this.data.totalWeeks && next < 0;
+    // 已经是第一周还向右拉 / 最后一周还向左拉 → 阻尼，给出「到头了」的手感
+    const atFirst = this.data.currentWeek <= 1 && pct > base;
+    const atLast = this.data.currentWeek >= this.data.totalWeeks && pct < base;
+
     if (atFirst || atLast) {
-      next = next * 0.35;
-    } else if (Math.abs(next) > MAX_DRAG) {
+      pct = base + (pct - base) * 0.35;
+    } else {
       // 超出最大位移后衰减，产生"拉不动"的手感
-      const sign = next > 0 ? 1 : -1;
-      next = sign * (MAX_DRAG + (Math.abs(next) - MAX_DRAG) * 0.3);
+      const maxDragPct = (MAX_DRAG / pageWidth) * PANEL_PCT;
+      const rel = pct - base;
+      if (Math.abs(rel) > maxDragPct) {
+        const sign = rel > 0 ? 1 : -1;
+        pct = base + sign * (maxDragPct + (Math.abs(rel) - maxDragPct) * 0.3);
+      }
     }
 
-    this.setData({ offset: next });
+    this.setData({ trackPct: pct });
   },
 
   onTouchEnd(e) {
@@ -760,12 +904,11 @@ Page({
 
     // 触发翻页：位移超过阈值，或快速滑动（fling）即使位移不足也翻页
     if (canNext && (dx <= -SWIPE_THRESHOLD || (velocity >= FLING_VELOCITY && dx < 0))) {
-      this.playSwitchAnimation(-1); // 向左 → 下一周
+      this.slideToAdjacent(1);  // 向左滑 → 下一周
     } else if (canPrev && (dx >= SWIPE_THRESHOLD || (velocity >= FLING_VELOCITY && dx > 0))) {
-      this.playSwitchAnimation(1);  // 向右 → 上一周
+      this.slideToAdjacent(-1); // 向右滑 → 上一周
     } else {
-      // 未达阈值：回弹归位
-      this.setData({ animate: true, offset: 0 });
+      this.snapBack();
     }
 
     this._dragging = false;
@@ -779,55 +922,7 @@ Page({
   _resetSwipe() {
     this._dragging = false;
     this._axis = null;
-    if (this.data.offset !== 0) {
-      this.setData({ animate: true, offset: 0 });
-    }
-  },
-
-  /**
-   * 翻页动画：先把当前内容沿滑动方向滑出，再切换数据并从另一侧滑入。
-   * 使用 CSS transform，不触发重排，性能开销低。
-   * @param {number} direction 1 = 向右滑出并切到上一周，-1 = 向左滑出并切到下一周
-   */
-  playSwitchAnimation(direction) {
-    const pageWidth = this._pageWidth || 375;
-
-    // 第 1 步：当前内容沿滑动方向滑出屏幕
-    this.setData({
-      animate: true,
-      offset: direction * pageWidth
-    });
-
-    // 第 2 步：切换数据 + 无动画归位到另一侧
-    setTimeout(() => {
-      const nextWeek = this.data.currentWeek - direction; // direction=1 → 上一周
-      this.setData({
-        currentWeek: nextWeek,
-        animate: false,
-        offset: -direction * pageWidth
-      });
-      this.syncWeekBadge(nextWeek);
-      this.renderGrid();
-      this.updateNowLine();
-
-      // 第 3 步：下一帧滑入居中
-      setTimeout(() => {
-        this.setData({ animate: true, offset: 0 });
-      }, 20);
-    }, 200);
-  },
-
-  /**
-   * 测量网格宽度（用于翻页动画的位移距离）
-   */
-  onGridReady() {
-    if (this._pageWidth) return;
-    const query = wx.createSelectorQuery().in(this);
-    query.select('.grid-body').boundingClientRect((rect) => {
-      if (rect && rect.width) {
-        this._pageWidth = rect.width;
-      }
-    }).exec();
+    this.snapBack();
   },
 
   /* ================= 课程详情 ================= */
@@ -902,10 +997,12 @@ Page({
           todayDow: pos.dayOfWeek,
           inTerm: pos.inTerm,
           noTimetable: false
+        }, () => {
+          this.buildWeekList();
+          this.syncWeekBadge(this.data.currentWeek);
+          this.renderTrack();
+          this.loadCourses();
         });
-        this.buildWeekList();
-        this.syncWeekBadge(this.data.currentWeek);
-        this.loadCourses();
       }
     } catch (err) {
       console.error('[timetable] 创建课表失败', err);

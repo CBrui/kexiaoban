@@ -107,6 +107,28 @@
   padding-bottom: 8rpx;
 }
 
+/*
+ * 表头滑动区：宽度 = 内容区 - 角格，与下方 .swipe-viewport 等宽，
+ * 因此两条轨道可以用同一个 trackPct 位移，星期表头与课程网格严格同步。
+ */
+.header-swipe {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.header-track {
+  flex: 0 0 100%;
+  display: flex;
+  will-change: transform;
+}
+
+.header-panel {
+  flex: 0 0 100%;
+  display: flex;
+}
+
 /* 左上角角格 */
 .corner-cell {
   width: 108rpx;
@@ -257,17 +279,31 @@
 }
 
 /*
- * 可滑动内容层
+ * 主体滑动轨道：并排的「上一周 / 本周 / 下一周」三个面板。
+ *
+ * 轨道宽度 = 一个面板宽度（子元素 flex: 0 0 100% 会溢出而不撑宽容器），
+ * 所以 translateX(-100%) 恰好移动一个面板 —— 位移用百分比表达，
+ * 与视口的像素宽度无关，无需等待测量即可精确对齐。
+ *
  * transform 由 JS 控制；拖动中关闭 transition 保证跟手，
  * 松手后开启 transition 产生回弹 / 切页动画。
  */
-.day-cols {
+.body-track {
+  flex: 0 0 100%;
   display: flex;
   will-change: transform;
 }
 
-.day-cols-animate {
-  transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+/* 周面板：一周的 7 列；position: relative 作为当前时间指示线的定位基准 */
+.week-panel {
+  flex: 0 0 100%;
+  display: flex;
+  position: relative;
+}
+
+/* 切页 / 回弹过渡；时长需与 JS 的 TRANSITION_MS(240ms) 保持一致 */
+.track-animate {
+  transition: transform 0.24s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .day-col {

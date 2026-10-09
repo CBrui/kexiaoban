@@ -32,21 +32,41 @@
   <!-- 课表网格 -->
   <view wx:else class="grid-wrap">
 
-    <!-- 表头：角格 + 星期日期（固定，不参与滑动） -->
+    <!--
+      表头：角格固定；星期日期随周次一起滑动。
+      与下方网格共用同一条轨道位移（trackPct），两者面板宽度一致，因此能严格对齐。
+    -->
     <view class="grid-header">
       <view class="corner-cell {{isViewingToday ? '' : 'corner-off'}}" bindtap="onOpenWeekPicker" hover-class="corner-hover">
         <text class="corner-week">第{{weekBadge.week}}周</text>
         <text class="corner-parity">{{weekBadge.parity}}</text>
       </view>
 
-      <view
-        wx:for="{{dayLabels}}"
-        wx:key="*this"
-        class="day-head {{dayIsToday[index] ? 'day-head-today' : ''}}"
-      >
-        <text class="day-name {{dayIsToday[index] ? 'day-name-today' : ''}}">{{item}}</text>
-        <text class="day-date {{dayIsToday[index] ? 'day-date-today' : ''}}">{{dayDates[index]}}</text>
-        <view wx:if="{{dayIsToday[index]}}" class="day-dot"></view>
+      <view class="header-swipe">
+        <view
+          class="header-track {{animate ? 'track-animate' : ''}}"
+          style="transform: translate3d({{trackPct}}%, 0, 0);"
+        >
+          <view
+            wx:for="{{panels}}"
+            wx:for-item="panel"
+            wx:for-index="panelIdx"
+            wx:key="week"
+            class="header-panel"
+          >
+            <view
+              wx:for="{{dayLabels}}"
+              wx:for-item="dayName"
+              wx:for-index="di"
+              wx:key="*this"
+              class="day-head {{panel.dayIsToday[di] ? 'day-head-today' : ''}}"
+            >
+              <text class="day-name {{panel.dayIsToday[di] ? 'day-name-today' : ''}}">{{dayName}}</text>
+              <text class="day-date {{panel.dayIsToday[di] ? 'day-date-today' : ''}}">{{panel.dayDates[di]}}</text>
+              <view wx:if="{{panel.dayIsToday[di]}}" class="day-dot"></view>
+            </view>
+          </view>
+        </view>
       </view>
     </view>
 
@@ -72,48 +92,60 @@
         </block>
       </view>
 
-      <!-- 可滑动区域：7 天 × 节次 -->
+      <!-- 可滑动区域：上一周 / 本周 / 下一周 三面板并排，拖动时相邻周真实可见 -->
       <view class="swipe-viewport">
         <view
-          class="day-cols {{animate ? 'day-cols-animate' : ''}}"
-          style="transform: translate3d({{offset}}px, 0, 0);"
+          class="body-track {{animate ? 'track-animate' : ''}}"
+          style="transform: translate3d({{trackPct}}%, 0, 0);"
         >
           <view
-            wx:for="{{grid}}"
-            wx:for-item="dayCol"
-            wx:for-index="dayIdx"
-            wx:key="dayIdx"
-            class="day-col {{dayIsToday[dayIdx] ? 'day-col-today' : ''}}"
+            wx:for="{{panels}}"
+            wx:for-item="panel"
+            wx:for-index="panelIdx"
+            wx:key="week"
+            class="week-panel"
           >
-            <block wx:for="{{dayCol}}" wx:for-item="cell" wx:for-index="rowIdx" wx:key="rowIdx">
-              <!-- 休息分隔行 -->
-              <view wx:if="{{cell && cell.isBreak}}" class="break-cell" style="height: {{breakH}}px;"></view>
+            <view
+              wx:for="{{panel.grid}}"
+              wx:for-item="dayCol"
+              wx:for-index="dayIdx"
+              wx:key="dayIdx"
+              class="day-col {{panel.dayIsToday[dayIdx] ? 'day-col-today' : ''}}"
+            >
+              <block wx:for="{{dayCol}}" wx:for-item="cell" wx:for-index="rowIdx" wx:key="rowIdx">
+                <!-- 休息分隔行 -->
+                <view wx:if="{{cell && cell.isBreak}}" class="break-cell" style="height: {{breakH}}px;"></view>
 
-              <!-- 普通节次格 -->
-              <view wx:else class="grid-cell" style="height: {{slotH}}px;">
-                <view
-                  wx:if="{{cell && !cell.placeholder}}"
-                  class="course-block"
-                  style="height: {{cell.span * slotH - 4}}px; background: {{cell.bg}}; border-left-color: {{cell.color}};"
-                  data-course="{{cell}}"
-                  bindtap="onTapCourse"
-                >
-                  <text class="course-name" style="color: {{cell.color}};">{{cell.name}}</text>
-                  <text wx:if="{{cell.location}}" class="course-loc">{{cell.location}}</text>
+                <!-- 普通节次格 -->
+                <view wx:else class="grid-cell" style="height: {{slotH}}px;">
+                  <view
+                    wx:if="{{cell && !cell.placeholder}}"
+                    class="course-block"
+                    style="height: {{cell.span * slotH - 4}}px; background: {{cell.bg}}; border-left-color: {{cell.color}};"
+                    data-course="{{cell}}"
+                    bindtap="onTapCourse"
+                  >
+                    <text class="course-name" style="color: {{cell.color}};">{{cell.name}}</text>
+                    <text wx:if="{{cell.location}}" class="course-loc">{{cell.location}}</text>
+                  </view>
                 </view>
-              </view>
-            </block>
-          </view>
-        </view>
+              </block>
+            </view>
 
-        <!-- 当前时间指示线：只在查看本周时显示，覆盖在今天所在列 -->
-        <view
-          wx:if="{{showNowLine}}"
-          class="now-line"
-          style="top: {{nowTop}}px; left: {{nowLeft}};"
-        >
-          <view class="now-line-flag">{{nowLabel}}</view>
-          <view class="now-line-bar"></view>
+            <!--
+              当前时间指示线：必须放在「今天所在周」的面板内部。
+              它随该面板一起被 translate3d 拖动，才能始终贴合「今天所在列」；
+              若放在轨道外面，滑动时它会停在原地不动，与滑动中的列错位。
+            -->
+            <view
+              wx:if="{{showNowLine && panel.isTodayWeek}}"
+              class="now-line"
+              style="top: {{nowTop}}px; left: {{nowLeft}};"
+            >
+              <view class="now-line-flag">{{nowLabel}}</view>
+              <view class="now-line-bar"></view>
+            </view>
+          </view>
         </view>
       </view>
     </view>
