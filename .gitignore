@@ -18,3 +18,7 @@ project.private.config.json
 miniprogram/project.private.config.json
 .idea/
 .vscode/
+
+# 本地工具缓存与临时分析产物（不参与协作）
+.workbuddy/
+/overview.md
