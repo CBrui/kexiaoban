@@ -294,8 +294,10 @@
   will-change: transform;
 }
 
-/* 周面板：一周的 7 列；position: relative 作为当前时间指示线的定位基准 */
-.week-panel {
+/* 周面板：一周的 7 列；position: relative 作为当前时间指示线的定位基准
+   注意：类名必须与「周次选择面板」的 .week-panel 区分，否则会被后者的
+   flex-direction: column 等规则覆盖，导致 7 天被竖排、只看得见周一。 */
+.track-panel {
   flex: 0 0 100%;
   display: flex;
   position: relative;

@@ -103,7 +103,7 @@
             wx:for-item="panel"
             wx:for-index="panelIdx"
             wx:key="week"
-            class="week-panel"
+            class="track-panel"
           >
             <view
               wx:for="{{panel.grid}}"
