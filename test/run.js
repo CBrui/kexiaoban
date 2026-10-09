@@ -19,7 +19,19 @@ global.wx = {
 };
 
 const M = path.resolve(__dirname, '../miniprogram');
-const { parseWeeks, formatWeeks, weekToDate, formatDate } = require(path.join(M, 'utils/week'));
+const {
+  parseWeeks,
+  formatWeeks,
+  weekToDate,
+  formatDate,
+  startOfDay,
+  daysBetween,
+  weekdayOf,
+  currentWeekOf,
+  todayPosition,
+  currentTimeStr,
+  isToday
+} = require(path.join(M, 'utils/week'));
 const { expandCourse, expandAll, toWeekGrid } = require(path.join(M, 'logic/course-expand'));
 const { alignFree, alignFreeWithRange, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
 const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRange } = require(path.join(M, 'logic/dnd-rule'));
@@ -305,6 +317,61 @@ eq('第 2 节后有休息（午休）', schedule.getBreakAfter(2) !== null, true
 eq('第 4 节后有休息（晚休）', schedule.getBreakAfter(4) !== null, true);
 eq('第 1 节后无休息', schedule.getBreakAfter(1) === null, true);
 eq('第 3 节后无休息', schedule.getBreakAfter(3) === null, true);
+
+/* ============ 21. 自动定位到今天（当前周 / 当前星期） ============ */
+group('【21】按「今天」自动定位 —— 当前周与星期');
+const TERM_START = '2026-09-07'; // 周一
+
+// 基准：学期起始日当天
+eq('开学当天 → 第 1 周', currentWeekOf(TERM_START, new Date('2026-09-07T09:00:00')), 1);
+eq('开学当天是周一', weekdayOf(new Date('2026-09-07T09:00:00')), 1);
+
+// 第 1 周内任意一天都是第 1 周
+eq('第 1 周周日仍在第 1 周', currentWeekOf(TERM_START, new Date('2026-09-13T23:00:00')), 1);
+// 第 2 周周一是 09-14
+eq('09-14 → 第 2 周', currentWeekOf(TERM_START, new Date('2026-09-14T00:00:00')), 2);
+// 第 3 周周三 = 09-23
+eq('09-23 → 第 3 周', currentWeekOf(TERM_START, new Date('2026-09-23T14:30:00')), 3);
+// 第 5 周 = 10-05 ~ 10-11
+eq('10-09 → 第 5 周', currentWeekOf(TERM_START, new Date('2026-10-09T13:00:00')), 5);
+eq('10-09 是周五', weekdayOf(new Date('2026-10-09T13:00:00')), 5);
+
+// 边界：开学前一天 → 回退到第 1 周
+eq('开学前一天 → 兜底第 1 周', currentWeekOf(TERM_START, new Date('2026-09-06T10:00:00')), 1);
+// 边界：超出学期总周数 → 停在最后一周
+eq('超出总周数 → 停在最后一周', currentWeekOf(TERM_START, new Date('2027-06-01T10:00:00'), 20), 20);
+
+/* ============ 22. todayPosition 综合定位 ============ */
+group('【22】todayPosition —— 学期内外的判定');
+const posIn = todayPosition(TERM_START, new Date('2026-10-09T13:48:00'), 20);
+eq('学期内 → week=5', posIn.week, 5);
+eq('学期内 → dayOfWeek=5', posIn.dayOfWeek, 5);
+eq('学期内 → inTerm=true', posIn.inTerm, true);
+eq('学期内 → date=2026-10-09', posIn.date, '2026-10-09');
+
+const posBefore = todayPosition(TERM_START, new Date('2026-08-01T10:00:00'), 20);
+eq('开学前 → inTerm=false', posBefore.inTerm, false);
+eq('开学前 → week 兜底为 1', posBefore.week, 1);
+
+const posAfter = todayPosition(TERM_START, new Date('2027-03-01T10:00:00'), 20);
+eq('学期后 → inTerm=false', posAfter.inTerm, false);
+eq('学期后 → week 停在 20', posAfter.week, 20);
+
+/* ============ 23. isToday 列定位 ============ */
+group('【23】isToday —— 表头/列高亮定位');
+const refDay = new Date('2026-10-09T13:48:00'); // 第 5 周周五
+ok('第 5 周周五 = 今天', isToday(TERM_START, 5, 5, refDay) === true);
+ok('第 5 周周四 ≠ 今天', isToday(TERM_START, 5, 4, refDay) === false);
+ok('第 4 周周五 ≠ 今天', isToday(TERM_START, 4, 5, refDay) === false);
+
+/* ============ 24. 日期差与时刻 ============ */
+group('【24】日期差与当前时刻');
+eq('同一天差值为 0', daysBetween(new Date('2026-10-09T08:00:00'), new Date('2026-10-09T23:00:00')), 0);
+eq('跨一天差值为 1', daysBetween(new Date('2026-10-09T08:00:00'), new Date('2026-10-10T01:00:00')), 1);
+eq('跨一周差值为 7', daysBetween(new Date('2026-10-09T08:00:00'), new Date('2026-10-16T08:00:00')), 7);
+eq('startOfDay 抹掉时分秒', formatDate(startOfDay(new Date('2026-10-09T23:59:59'))), '2026-10-09');
+eq('currentTimeStr 补零', currentTimeStr(new Date('2026-10-09T08:05:00')), '08:05');
+eq('currentTimeStr 晚间', currentTimeStr(new Date('2026-10-09T19:30:00')), '19:30');
 
 /* ============ 汇总 ============ */
 console.log('\n' + '='.repeat(52));

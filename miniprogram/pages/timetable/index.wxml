@@ -16,16 +16,21 @@
   <!-- 课表网格 -->
   <view wx:else class="grid-wrap">
 
-    <!-- 表头：角格 + 星期（固定，不参与滑动） -->
+    <!-- 表头：角格 + 星期日期（固定，不参与滑动） -->
     <view class="grid-header">
-      <view class="corner-cell" bindtap="onOpenWeekPicker" hover-class="corner-hover">
+      <view class="corner-cell {{isViewingToday ? '' : 'corner-off'}}" bindtap="onOpenWeekPicker" hover-class="corner-hover">
         <text class="corner-week">第{{weekBadge.week}}周</text>
         <text class="corner-parity">{{weekBadge.parity}}</text>
       </view>
 
-      <view wx:for="{{dayLabels}}" wx:key="*this" class="day-head">
-        <text class="day-name">{{item}}</text>
-        <text class="day-date">{{dayDates[index]}}</text>
+      <view
+        wx:for="{{dayLabels}}"
+        wx:key="*this"
+        class="day-head {{dayIsToday[index] ? 'day-head-today' : ''}}"
+      >
+        <text class="day-name {{dayIsToday[index] ? 'day-name-today' : ''}}">{{item}}</text>
+        <text class="day-date {{dayIsToday[index] ? 'day-date-today' : ''}}">{{dayDates[index]}}</text>
+        <view wx:if="{{dayIsToday[index]}}" class="day-dot"></view>
       </view>
     </view>
 
@@ -57,7 +62,13 @@
           class="day-cols {{animate ? 'day-cols-animate' : ''}}"
           style="transform: translate3d({{offset}}px, 0, 0);"
         >
-          <view wx:for="{{grid}}" wx:for-item="dayCol" wx:for-index="dayIdx" wx:key="dayIdx" class="day-col">
+          <view
+            wx:for="{{grid}}"
+            wx:for-item="dayCol"
+            wx:for-index="dayIdx"
+            wx:key="dayIdx"
+            class="day-col {{dayIsToday[dayIdx] ? 'day-col-today' : ''}}"
+          >
             <block wx:for="{{dayCol}}" wx:for-item="cell" wx:for-index="rowIdx" wx:key="rowIdx">
               <!-- 休息分隔行 -->
               <view wx:if="{{cell && cell.isBreak}}" class="break-cell" style="height: {{breakH}}px;"></view>
@@ -78,13 +89,30 @@
             </block>
           </view>
         </view>
+
+        <!-- 当前时间指示线：只在查看本周时显示，覆盖在今天所在列 -->
+        <view
+          wx:if="{{showNowLine}}"
+          class="now-line"
+          style="top: {{nowTop}}px; left: {{nowLeft}};"
+        >
+          <view class="now-line-flag">{{nowLabel}}</view>
+          <view class="now-line-bar"></view>
+        </view>
       </view>
     </view>
 
     <!-- 底部操作 -->
     <view class="grid-footer">
-      <text class="swipe-hint">左右滑动切换周次</text>
-      <text class="footer-link" bindtap="onGoScheduleSetting">节次设置</text>
+      <view class="footer-left">
+        <text wx:if="{{showNowLine}}" class="now-hint">现在 {{nowLabel}}</text>
+        <text wx:elif="{{inTerm}}" class="now-hint">本周 · 第{{todayWeek}}周</text>
+        <text wx:else class="now-hint">今天不在学期内</text>
+      </view>
+      <view class="footer-right">
+        <view class="footer-btn" bindtap="onBackToToday">回到今天</view>
+        <view class="footer-btn footer-btn-plain" bindtap="onGoScheduleSetting">节次设置</view>
+      </view>
     </view>
   </view>
 
@@ -93,19 +121,23 @@
     <view class="week-panel" catchtap="noop">
       <view class="week-panel-head">
         <text class="week-panel-title">选择周次</text>
-        <text class="week-panel-close" bindtap="onCloseWeekPicker">关闭</text>
+        <view class="week-panel-head-right">
+          <text class="week-panel-today" bindtap="onBackToToday">回到今天</text>
+          <text class="week-panel-close" bindtap="onCloseWeekPicker">关闭</text>
+        </view>
       </view>
       <scroll-view class="week-panel-scroll" scroll-y>
         <view class="week-panel-grid">
           <view
             wx:for="{{weeks}}"
             wx:key="week"
-            class="week-chip {{item.week === currentWeek ? 'week-chip-active' : ''}}"
+            class="week-chip {{item.week === currentWeek ? 'week-chip-active' : ''}} {{item.week === todayWeek && inTerm ? 'week-chip-today' : ''}}"
             data-week="{{item.week}}"
             bindtap="onSwitchWeek"
           >
             <text class="week-chip-no">{{item.week}}</text>
             <text class="week-chip-parity">{{item.parity}}</text>
+            <text wx:if="{{item.week === todayWeek && inTerm}}" class="week-chip-badge">本周</text>
           </view>
         </view>
       </scroll-view>

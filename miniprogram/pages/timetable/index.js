@@ -10,9 +10,15 @@
  *   - 点击课程块弹出详情卡片
  */
 const { expandAll, findCourseAt } = require('../../logic/course-expand');
-const { weekToDate, formatDate } = require('../../utils/week');
+const {
+  weekToDate,
+  formatDate,
+  currentWeekOf,
+  todayPosition,
+  currentTimeStr
+} = require('../../utils/week');
 const { colorOf, softOf } = require('../../utils/color');
-const { buildSlotAxis, formatSlotTime, getTotalSlots } = require('../../utils/schedule');
+const { buildSlotAxis, formatSlotTime, getTotalSlots, toMinutes } = require('../../utils/schedule');
 const { listCourses, removeCourse } = require('../../api/course');
 const config = require('../../config');
 
@@ -26,6 +32,8 @@ const SWIPE_THRESHOLD = 40;
 const MAX_DRAG = 120;
 // 快速滑动（fling）的速度阈值（px/ms），超过则即使位移不足也翻页
 const FLING_VELOCITY = 0.5;
+// 当前时间指示线刷新间隔（毫秒）：1 分钟
+const NOW_TICK_INTERVAL = 60 * 1000;
 
 Page({
   data: {
@@ -38,9 +46,22 @@ Page({
 
     dayLabels: DAY_LABELS,
     dayDates: [],       // 每天对应日期（如 9月7日），随周次变化
+    dayIsToday: [],     // 每天是否为「今天」，用于表头高亮
     slotAxis: [],
     grid: [],
     totalSlots: 6,
+
+    // 「今天」定位信息
+    todayWeek: 1,       // 今天所在的周次
+    todayDow: 1,        // 今天是一周中的第几天（1=周一）
+    inTerm: true,       // 今天是否落在学期范围内
+    isViewingToday: true, // 当前是否正看着本周
+
+    // 当前时间指示线（只在查看本周时显示）
+    nowLabel: '',       // 如 "14:32"
+    nowTop: -999,       // 指示线距网格顶部像素（-999 表示不显示）
+    nowLeft: '0%',      // 指示线所在列（今天所在列的左偏移百分比）
+    showNowLine: false,
 
     // 动态行高（px）：onReady 后按屏幕自适应，使课表铺满屏幕
     slotH: 52,          // 节次行高，初始 ≈ 104rpx
@@ -66,6 +87,8 @@ Page({
   },
 
   onLoad() {
+    // ① 先按「今天」定位到当前周（找不到则退回第 1 周）
+    this.locateToday(true);
     this.buildWeekList();
     this.refreshSchedule();
     this.syncWeekBadge(this.data.currentWeek);
@@ -75,7 +98,11 @@ Page({
   onReady() {
     this._ready = true;
     // 等首帧布局稳定后测量网格高度，计算自适应行高
-    setTimeout(() => this.computeLayout(), 50);
+    setTimeout(() => {
+      this.computeLayout();
+      this.updateNowLine();
+    }, 50);
+    this.startNowTicker();
   },
 
   onShow() {
@@ -84,10 +111,174 @@ Page({
     if (!this.data.loading && app.globalData.ready) {
       this.loadCourses();
     }
+    // 跨天 / 跨周：回来时重新定位一次（例如应用被切到后台过夜）
+    const changed = this.locateToday(false);
+    if (changed && this.courses && this.courses.length) {
+      this.renderGrid();
+    }
+    this.startNowTicker();
+  },
+
+  onHide() {
+    this.stopNowTicker();
+  },
+
+  onUnload() {
+    this.stopNowTicker();
   },
 
   onPullDownRefresh() {
+    // 下拉时把「今天」重新定位一次，回到本周
+    this.locateToday(true);
+    this.syncWeekBadge(this.data.currentWeek);
+    this.renderGrid();
     this.loadCourses().then(() => wx.stopPullDownRefresh());
+  },
+
+  /**
+   * 按「今天」定位到当前周
+   *
+   * @param {boolean} force 为 true 时强制跳回本周（首次进入 / 下拉刷新 / 点「回到今天」）；
+   *                        为 false 时只更新定位信息，仅当日期真的跨周了才跟随跳转，
+   *                        避免打断正在翻看其它周的用户
+   */
+  locateToday(force) {
+    const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
+    const prevTodayWeek = this.data.todayWeek;
+    const prevTodayDow = this.data.todayDow;
+    const changed = force || pos.week !== prevTodayWeek || pos.dayOfWeek !== prevTodayDow;
+
+    this.setData({
+      todayWeek: pos.week,
+      todayDow: pos.dayOfWeek,
+      inTerm: pos.inTerm
+    });
+
+    // 是否应该改变用户当前所在周次：
+    //   force                     → 强制回本周
+    //   跨周了 且 用户正看着旧的本周 → 跟随跳转（用户没在看别的周）
+    const wasViewingOldTodayWeek = this.data.currentWeek === prevTodayWeek;
+    if (force || (pos.week !== prevTodayWeek && wasViewingOldTodayWeek)) {
+      this.setData({ currentWeek: pos.week });
+    }
+
+    this.syncWeekBadge(this.data.currentWeek);
+    this.updateNowLine();
+    return changed;
+  },
+
+  /* ================= 当前时间指示线 ================= */
+
+  /**
+   * 计算「现在」在网格中的纵向位置，用于绘制当前时间指示线。
+   *
+   * 做法：把当前时刻与每一节的起止时间比对，换算成像素偏移：
+   *   - 落在某节课内 → 按课时进度线性插值
+   *   - 落在休息时段内 → 落在对应的休息行
+   *   - 在当天第一节课前 / 最后一节课后 → 显示在最顶部 / 最底部
+   *
+   * 只在「当前周次的今天列」显示，翻到别的周时自动隐藏。
+   */
+  updateNowLine() {
+    const axis = this.data.slotAxis || [];
+    const slotH = this.data.slotH;
+    const breakH = this.data.breakH;
+    const isViewingToday = this.data.inTerm && this.data.currentWeek === this.data.todayWeek;
+
+    if (!axis.length || !isViewingToday || !this._gridBodyH) {
+      if (this.data.showNowLine) this.setData({ showNowLine: false });
+      return;
+    }
+
+    const nowMin = toMinutes(currentTimeStr());
+    const nowLabel = currentTimeStr();
+
+    let top = 0;
+    let placed = false;
+
+    for (let i = 0; i < axis.length; i++) {
+      const row = axis[i];
+
+      if (row.type === 'slot') {
+        const startMin = toMinutes(row.start);
+        const endMin = toMinutes(row.end);
+
+        if (nowMin < startMin) {
+          // 还没到这一节 —— 停在当前累计位置（相当于课间上沿）
+          placed = true;
+          break;
+        }
+        if (nowMin >= startMin && nowMin <= endMin) {
+          // 正在这一节内：按进度插值
+          const ratio = (nowMin - startMin) / Math.max(1, endMin - startMin);
+          top += ratio * slotH;
+          placed = true;
+          break;
+        }
+        top += slotH;
+      } else {
+        const startMin = toMinutes(row.start);
+        const endMin = row.end ? toMinutes(row.end) : startMin;
+        if (nowMin >= startMin && nowMin <= endMin) {
+          // 处于休息时间段
+          const ratio = endMin > startMin ? (nowMin - startMin) / (endMin - startMin) : 0;
+          top += ratio * breakH;
+          placed = true;
+          break;
+        }
+        top += breakH;
+      }
+    }
+
+    // 晚于最后一节：停在最底部
+    if (!placed) top = this._gridBodyH;
+
+    // 今天所在列的左偏移百分比（7 等分，列宽 = 100/7 %）
+    const leftPct = ((this.data.todayDow - 1) * 100) / 7;
+
+    this.setData({
+      showNowLine: true,
+      nowTop: Math.max(0, Math.min(top, this._gridBodyH)),
+      nowLabel,
+      nowLeft: `${leftPct}%`
+    });
+  },
+
+  startNowTicker() {
+    this.stopNowTicker();
+    this._nowTimer = setInterval(() => {
+      // 跨天检测：日期变了要重新定位
+      const today = formatDate(new Date());
+      if (this._lastTodayDate && this._lastTodayDate !== today) {
+        this.locateToday(false);
+        this.renderGrid();
+      }
+      this._lastTodayDate = today;
+      this.updateNowLine();
+    }, NOW_TICK_INTERVAL);
+    this._lastTodayDate = formatDate(new Date());
+  },
+
+  stopNowTicker() {
+    if (this._nowTimer) {
+      clearInterval(this._nowTimer);
+      this._nowTimer = null;
+    }
+  },
+
+  /**
+   * 「回到本周并定位今天」快捷操作
+   */
+  onBackToToday() {
+    this.locateToday(true);
+    this.syncWeekBadge(this.data.currentWeek);
+    this.renderGrid();
+    this.updateNowLine();
+    if (this.data.inTerm) {
+      wx.showToast({ title: '已回到本周', icon: 'none' });
+    } else {
+      wx.showToast({ title: '今天不在学期内', icon: 'none' });
+    }
   },
 
   /**
@@ -114,13 +305,16 @@ Page({
   },
 
   syncWeekBadge(week) {
+    const isViewingToday = this.data.inTerm && week === this.data.todayWeek;
     this.setData({
       weekBadge: {
         week,
         parity: week % 2 === 1 ? '单' : '双',
         label: `第${week}周 · ${week % 2 === 1 ? '单' : '双'}`
       },
-      dayDates: this.computeDayDates(week)
+      isViewingToday,
+      dayDates: this.computeDayDates(week),
+      dayIsToday: this.computeDayIsToday(week)
     });
   },
 
@@ -132,6 +326,18 @@ Page({
     for (let d = 1; d <= 7; d++) {
       const date = weekToDate(config.TERM_START_MONDAY, week, d);
       list.push(`${date.getMonth() + 1}月${date.getDate()}日`);
+    }
+    return list;
+  },
+
+  /**
+   * 标记当前周里哪一列是「今天」，用于表头与列高亮
+   */
+  computeDayIsToday(week) {
+    const list = [];
+    const isThisWeek = this.data.inTerm && Number(week) === this.data.todayWeek;
+    for (let d = 1; d <= 7; d++) {
+      list.push(isThisWeek && d === this.data.todayDow);
     }
     return list;
   },
@@ -153,6 +359,8 @@ Page({
         slotH: Math.max(30, slotH),
         breakH: Math.max(16, slotH * breakRatio)
       });
+      // 行高变化会改变当前时间指示线的位置，需要同步重算
+      this.updateNowLine();
     };
 
     if (this._gridBodyH) {
@@ -255,6 +463,7 @@ Page({
     this.setData({ currentWeek: week, showWeekPicker: false });
     this.syncWeekBadge(week);
     this.renderGrid();
+    this.updateNowLine();
   },
 
   onPrevWeek() {
@@ -263,6 +472,7 @@ Page({
       this.setData({ currentWeek: w });
       this.syncWeekBadge(w);
       this.renderGrid();
+      this.updateNowLine();
     }
   },
 
@@ -272,6 +482,7 @@ Page({
       this.setData({ currentWeek: w });
       this.syncWeekBadge(w);
       this.renderGrid();
+      this.updateNowLine();
     }
   },
 
@@ -407,6 +618,7 @@ Page({
       });
       this.syncWeekBadge(nextWeek);
       this.renderGrid();
+      this.updateNowLine();
 
       // 第 3 步：下一帧滑入居中
       setTimeout(() => {
@@ -488,6 +700,13 @@ Page({
 
   onGetToday() {
     return formatDate(new Date());
+  },
+
+  /**
+   * 供 WXML 直接调用的当前时刻（HH:MM）
+   */
+  onGetNow() {
+    return currentTimeStr();
   },
 
   noop() {}
