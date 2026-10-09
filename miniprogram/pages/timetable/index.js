@@ -441,7 +441,7 @@ Page({
     this.setData({ animate: true, trackPct: -PANEL_PCT * (this.data.trackIndex + s) });
 
     // 第 2 步：换成目标周的轨道，并停在「反向另一侧」
-    setTimeout(() => {
+    this._scheduleAnim(TRANSITION_MS, () => {
       const { panels, trackIndex } = this.buildPanels(target);
       this.setData({
         currentWeek: target,
@@ -454,11 +454,11 @@ Page({
       this.updateNowLine();
 
       // 第 3 步：下一帧滑入居中
-      setTimeout(() => {
+      this._scheduleAnim(20, () => {
         this.setData({ animate: true, trackPct: -PANEL_PCT * trackIndex });
         this._toastBackToToday(pos);
-      }, 20);
-    }, TRANSITION_MS);
+      });
+    });
   },
 
   /**
@@ -467,9 +467,9 @@ Page({
   playEmphasis() {
     const base = -PANEL_PCT * this.data.trackIndex;
     this.setData({ animate: true, trackPct: base + 8 });
-    setTimeout(() => {
+    this._scheduleAnim(140, () => {
       this.setData({ trackPct: base });
-    }, 140);
+    });
   },
 
   _toastBackToToday(pos) {
@@ -477,6 +477,56 @@ Page({
       wx.showToast({ title: `已回到第${pos.week}周`, icon: 'none' });
     } else {
       wx.showToast({ title: '今天不在学期内', icon: 'none' });
+    }
+  },
+
+  /* ================= 切页动画的收尾调度 ================= */
+
+  /**
+   * 登记一次「过渡播完后要做的事」。
+   *
+   * 背景：切页是两段式 —— 先让 CSS 过渡把画面滑到位，过渡结束后再重定基准
+   * （rebase：换当前周、重建面板、位移归位）。第二段得等过渡结束，所以用定时器。
+   *
+   * 问题：用户**快速连续滑动**时，上一次的收尾还没执行，新手势就开始了。
+   * 若放任那个定时器在本次拖动中途触发，它会用旧的面板与位移覆盖当前状态，
+   * 画面被猛地拽回 —— 表现就是「一抽一抽」。所以收尾动作统一在这里登记，
+   * 并在新手势开始时结算掉（见 _flushAnim）。
+   */
+  _scheduleAnim(delay, finalize) {
+    this._cancelAnim();
+    const timerId = setTimeout(() => {
+      this._pendingAnim = null;
+      finalize();
+    }, delay);
+    this._pendingAnim = { timerId, finalize };
+  },
+
+  _cancelAnim() {
+    if (this._pendingAnim) {
+      clearTimeout(this._pendingAnim.timerId);
+      this._pendingAnim = null;
+    }
+  },
+
+  /**
+   * 立即结算未完成的收尾动作（不等过渡播完）。
+   *
+   * 跨多周跳转是「滑出 → 换轨 → 滑入」三段式，所以这里要**逐段结算干净**：
+   * 结算完一段后可能又登记了下一段，必须循环到没有待办为止，
+   * 否则残余的那段仍会在拖动过程中触发。
+   *
+   * 取舍：宁可让画面「一步到位」落到已确定的目标位（一次性），
+   * 也不能让旧定时器在拖动中改写位移（持续抽动）。
+   */
+  _flushAnim() {
+    let guard = 0;
+    while (this._pendingAnim && guard < 10) {
+      const pending = this._pendingAnim;
+      clearTimeout(pending.timerId);
+      this._pendingAnim = null;
+      pending.finalize();
+      guard += 1;
     }
   },
 
@@ -665,8 +715,8 @@ Page({
       trackPct: -PANEL_PCT * (this.data.trackIndex + delta)
     });
 
-    // 第 2 步：动画结束后换当前周并重定基准
-    setTimeout(() => {
+    // 第 2 步：过渡结束后换当前周并重定基准
+    this._scheduleAnim(TRANSITION_MS, () => {
       const { panels, trackIndex } = this.buildPanels(target);
       this.setData({
         currentWeek: target,
@@ -677,7 +727,7 @@ Page({
       });
       this.syncWeekBadge(target);
       this.updateNowLine();
-    }, TRANSITION_MS);
+    });
   },
 
   /**
@@ -699,7 +749,7 @@ Page({
     this.setData({ animate: true, trackPct: -PANEL_PCT * (this.data.trackIndex + s) });
 
     // 第 2 步：换成目标周的轨道，并停在「反向另一侧」
-    setTimeout(() => {
+    this._scheduleAnim(TRANSITION_MS, () => {
       const { panels, trackIndex } = this.buildPanels(target);
       this.setData({
         currentWeek: target,
@@ -712,17 +762,20 @@ Page({
       this.updateNowLine();
 
       // 第 3 步：下一帧滑入居中
-      setTimeout(() => {
+      this._scheduleAnim(20, () => {
         this.setData({ animate: true, trackPct: -PANEL_PCT * trackIndex });
-      }, 20);
-    }, TRANSITION_MS);
+      });
+    });
   },
 
   /**
-   * 未达翻页阈值时回弹归位
+   * 未达翻页阈值时回弹归位。
+   * 已经在基准位时直接返回 —— 避免每一次轻点都产生一次无谓的跨线程通信。
    */
   snapBack() {
-    this.setData({ animate: true, trackPct: -PANEL_PCT * this.data.trackIndex });
+    const base = -PANEL_PCT * this.data.trackIndex;
+    if (Math.abs(this.data.trackPct - base) < 0.01) return;
+    this.setData({ animate: true, trackPct: base });
   },
 
   /**
@@ -818,6 +871,11 @@ Page({
     const t = e.touches && e.touches[0];
     if (!t) return;
 
+    // 关键：先把上一次切页动画的收尾「结算」掉。
+    // 快速连续滑动时，上一次的收尾定时器还没触发；放任它会在本次拖动中途
+    // 改写位移与面板，画面被拽回去 —— 这就是「滑快了会一抽一抽」的根因。
+    this._flushAnim();
+
     // 记录起点（存实例上，避免频繁 setData）
     this._startX = t.clientX;
     this._startY = t.clientY;
@@ -826,8 +884,9 @@ Page({
     this._axis = null;      // 'x' 横向 / 'y' 纵向 / null 未定
     this._dragging = false;
 
-    // 触摸开始时立即关闭过渡动画，保证跟手无延迟
-    this.setData({ animate: false });
+    // 触摸开始时关闭过渡动画，保证跟手无延迟。
+    // 结算后 animate 通常已是 false，此时跳过，少一次跨线程通信。
+    if (this.data.animate) this.setData({ animate: false });
   },
 
   onTouchMove(e) {
