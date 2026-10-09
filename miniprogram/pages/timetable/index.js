@@ -20,6 +20,7 @@ const {
 const { colorOf, softOf } = require('../../utils/color');
 const { buildSlotAxis, formatSlotTime, getTotalSlots, toMinutes } = require('../../utils/schedule');
 const { listCourses, removeCourse } = require('../../api/course');
+const timetableApi = require('../../api/timetable');
 const config = require('../../config');
 
 const app = getApp();
@@ -47,8 +48,15 @@ function requestAnimationFrameCompat(fn) {
 Page({
   data: {
     currentWeek: 1,
-    totalWeeks: 20,
+    totalWeeks: config.DEFAULT_TOTAL_WEEKS || 20,
     weeks: [],
+
+    // 当前课表（多课表支持）：名称、开课日期、总周次都来自这张课表自身
+    timetableId: null,
+    timetableName: '',
+    termStartMonday: config.TERM_START_MONDAY,
+    termRangeText: '',   // 如 "9月7日 - 1月24日"
+    noTimetable: false,  // 一张课表都没有时的空态（正常情况下 ensureDefaultTimetable 会兜底）
 
     // 当前周描述
     weekBadge: { week: 1, parity: '单', label: '第1周 · 单' },
@@ -96,19 +104,72 @@ Page({
   },
 
   onLoad() {
-    // 首次进入：直接定位到本周（此时界面尚未呈现，无需动画）
-    const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
-    this.setData({
-      currentWeek: pos.week,
-      todayWeek: pos.week,
-      todayDow: pos.dayOfWeek,
-      inTerm: pos.inTerm
-    });
-
+    // 多课表：先确定「当前课表」，取它自己的开课日期与总周次。
+    // 首次进入时界面尚未呈现，直接定位到本周，无需动画。
     this.buildWeekList();
     this.refreshSchedule();
-    this.syncWeekBadge(this.data.currentWeek);
-    app.whenReady(() => this.loadCourses());
+
+    app.whenReady(async () => {
+      await this.loadCurrentTimetable();
+      const pos = this.todayPos();
+      this.setData({
+        currentWeek: pos.week,
+        todayWeek: pos.week,
+        todayDow: pos.dayOfWeek,
+        inTerm: pos.inTerm
+      });
+      this.buildWeekList();
+      this.syncWeekBadge(this.data.currentWeek);
+      this.loadCourses();
+    });
+  },
+
+  /**
+   * 读取当前课表，把它的开课日期 / 总周次写进 data。
+   *
+   * 没有任何课表时会自动创建一张「我的课表」（ensureDefaultTimetable 幂等），
+   * 同时把历史遗留的、没有 timetable_id 的课程迁移进来，避免升级后课表看起来空掉。
+   */
+  async loadCurrentTimetable() {
+    try {
+      const tt = await timetableApi.ensureDefaultTimetable();
+      if (!tt) {
+        this.setData({ noTimetable: true });
+        return null;
+      }
+      const totalWeeks = timetableApi.clampTotalWeeks(tt.total_weeks);
+      this.setData({
+        timetableId: tt.id,
+        timetableName: tt.name,
+        termStartMonday: tt.term_start_monday,
+        totalWeeks,
+        termRangeText: this.formatTermRange(tt)
+      });
+      return tt;
+    } catch (err) {
+      console.error('[timetable] 读取当前课表失败', err);
+      this.setData({ noTimetable: true });
+      return null;
+    }
+  },
+
+  /**
+   * 「第 1 周周一 ~ 最后一周周日」的展示文本，用于底部状态栏
+   */
+  formatTermRange(tt) {
+    const end = timetableApi.endDateOf(tt);
+    if (!end) return '';
+    const start = new Date(tt.term_start_monday);
+    const fmt = (d) => `${d.getMonth() + 1}月${d.getDate()}日`;
+    return `${fmt(start)} - ${fmt(end)}`;
+  },
+
+  /**
+   * 用「当前课表」的配置计算今天的位置。
+   * 所有需要定位的地方统一走这里，避免各处重复传参。
+   */
+  todayPos() {
+    return todayPosition(this.data.termStartMonday, null, this.data.totalWeeks);
   },
 
   onReady() {
@@ -125,7 +186,8 @@ Page({
     // 从设置页返回时，节次可能已改变，需要重算时间轴
     this.refreshSchedule();
     if (!this.data.loading && app.globalData.ready) {
-      this.loadCourses();
+      // 可能刚在「课表管理」里切换了当前课表：先比对 id，变了就整页重载
+      this.syncTimetableIfChanged();
     }
     // 跨天 / 跨周：只刷新定位信息，不改变用户当前浏览的周次
     const changed = this.locateToday();
@@ -133,6 +195,54 @@ Page({
       this.renderGrid();
     }
     this.startNowTicker();
+  },
+
+  /**
+   * 检测「当前课表」是否被换过（用户在课表管理页切换 / 改名 / 改了开课时间或周次）。
+   * 变了就重载课表配置，并把视图拉回今天所在周 —— 换了一张课表后，
+   * 旧的周次数字对新课表没有意义。
+   */
+  async syncTimetableIfChanged() {
+    try {
+      const tt = await timetableApi.getCurrentTimetable();
+      if (!tt) {
+        this.setData({ noTimetable: true });
+        return;
+      }
+      const idChanged = String(tt.id) !== String(this.data.timetableId);
+      const cfgChanged =
+        tt.term_start_monday !== this.data.termStartMonday ||
+        timetableApi.clampTotalWeeks(tt.total_weeks) !== this.data.totalWeeks ||
+        tt.name !== this.data.timetableName;
+
+      if (!idChanged && !cfgChanged) return;
+
+      const totalWeeks = timetableApi.clampTotalWeeks(tt.total_weeks);
+      const pos = todayPosition(tt.term_start_monday, null, totalWeeks);
+
+      this.setData({
+        timetableId: tt.id,
+        timetableName: tt.name,
+        termStartMonday: tt.term_start_monday,
+        totalWeeks,
+        termRangeText: this.formatTermRange(tt),
+        noTimetable: false,
+        todayWeek: pos.week,
+        todayDow: pos.dayOfWeek,
+        inTerm: pos.inTerm,
+        // 换了课表 → 回到本周；只改配置 → 周次越界时收敛到最后一周年
+        currentWeek: idChanged
+          ? pos.week
+          : Math.min(this.data.currentWeek, totalWeeks)
+      });
+
+      this.buildWeekList();
+      this.syncWeekBadge(this.data.currentWeek);
+      this.renderGrid();
+      this.updateNowLine();
+    } catch (err) {
+      console.error('[timetable] 同步课表配置失败', err);
+    }
   },
 
   onHide() {
@@ -158,7 +268,7 @@ Page({
    * @returns {boolean} 定位信息是否发生了变化（用于决定是否需要重绘网格）
    */
   locateToday() {
-    const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
+    const pos = this.todayPos();
     const changed = pos.week !== this.data.todayWeek ||
       pos.dayOfWeek !== this.data.todayDow ||
       pos.inTerm !== this.data.inTerm;
@@ -287,7 +397,7 @@ Page({
    * 跨多周时不逐周播放（那会花很久），而是一次性滑出 + 换数据 + 滑入。
    */
   onBackToToday() {
-    const pos = todayPosition(config.TERM_START_MONDAY, null, this.data.totalWeeks);
+    const pos = this.todayPos();
     const target = pos.week;
     const current = this.data.currentWeek;
     const pageWidth = this._pageWidth || 375;
@@ -408,7 +518,7 @@ Page({
   computeDayDates(week) {
     const list = [];
     for (let d = 1; d <= 7; d++) {
-      const date = weekToDate(config.TERM_START_MONDAY, week, d);
+      const date = weekToDate(this.data.termStartMonday, week, d);
       list.push(`${date.getMonth() + 1}月${date.getDate()}日`);
     }
     return list;
@@ -768,6 +878,39 @@ Page({
 
   onGoBuild() {
     wx.switchTab({ url: '/pages/build/index' });
+  },
+
+  /**
+   * 点课表名称 → 进「课表管理」（新建 / 切换 / 改开课时间与周次）
+   */
+  onGoTimetableManage() {
+    wx.navigateTo({ url: '/pages/timetable-manage/index' });
+  },
+
+  /**
+   * 空态：一张课表都没有时直接建一张
+   */
+  async onCreateTimetable() {
+    try {
+      const tt = await timetableApi.ensureDefaultTimetable();
+      if (tt) {
+        await this.loadCurrentTimetable();
+        const pos = this.todayPos();
+        this.setData({
+          currentWeek: pos.week,
+          todayWeek: pos.week,
+          todayDow: pos.dayOfWeek,
+          inTerm: pos.inTerm,
+          noTimetable: false
+        });
+        this.buildWeekList();
+        this.syncWeekBadge(this.data.currentWeek);
+        this.loadCourses();
+      }
+    } catch (err) {
+      console.error('[timetable] 创建课表失败', err);
+      wx.showToast({ title: '创建失败，请重试', icon: 'none' });
+    }
   },
 
   onRetry() {

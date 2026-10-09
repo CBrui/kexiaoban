@@ -67,6 +67,17 @@
   display: flex;
 }
 
+.card-hover {
+  background: var(--color-bg);
+}
+
+.tt-current {
+  display: block;
+  font-size: 26rpx;
+  color: var(--color-primary);
+  margin: 8rpx 0 20rpx;
+}
+
 .stat-item {
   flex: 1;
   display: flex;

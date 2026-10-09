@@ -47,6 +47,49 @@
   margin: 0 auto;
 }
 
+/* ---------- 当前课表条 ---------- */
+.tt-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18rpx 24rpx 14rpx;
+  background: var(--color-surface);
+}
+
+.tt-bar-hover {
+  background: var(--color-bg);
+}
+
+.tt-bar-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.tt-name {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 500;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tt-range {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  margin-top: 4rpx;
+}
+
+.tt-switch {
+  flex-shrink: 0;
+  font-size: 24rpx;
+  color: var(--color-primary);
+  margin-left: 16rpx;
+}
+
 /* ---------- 网格容器 ---------- */
 .grid-wrap {
   flex: 1;

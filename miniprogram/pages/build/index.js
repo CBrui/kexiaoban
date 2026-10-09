@@ -7,8 +7,11 @@
  *       接入云服务大模型后替换 parseByAI 的实现即可。
  */
 const { addCourse } = require('../../api/course');
+const timetableApi = require('../../api/timetable');
 const { parseWeeks } = require('../../utils/week');
 const { getTotalSlots } = require('../../utils/schedule');
+
+const app = getApp();
 
 const DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
@@ -36,6 +39,9 @@ Page({
 
   onLoad() {
     this.refreshSlotOptions();
+    // 多课表：课程必须归属于某张课表。没有课表时先建一张默认课表，
+    // 否则这里新增的课程会没有归属而显示不出来。
+    app.whenReady(() => timetableApi.ensureDefaultTimetable());
   },
 
   onShow() {
@@ -93,6 +99,8 @@ Page({
     const f = this.data.form;
     wx.showLoading({ title: '保存中' });
     try {
+      // 兜底：确保存在可归属的课表（正常路径下 onLoad 已创建）
+      await timetableApi.ensureDefaultTimetable();
       await addCourse({
         name: f.name.trim(),
         teacher: f.teacher.trim(),
@@ -277,6 +285,8 @@ Page({
 
     wx.showLoading({ title: '写入中' });
     try {
+      // 兜底：确保存在可归属的课表
+      await timetableApi.ensureDefaultTimetable();
       const records = list.map((c) => ({
         name: c.name,
         teacher: c.teacher,

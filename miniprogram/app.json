@@ -5,7 +5,8 @@
     "pages/match/index",
     "pages/reminder/index",
     "pages/profile/index",
-    "pages/schedule/index"
+    "pages/schedule/index",
+    "pages/timetable-manage/index"
   ],
   "window": {
     "backgroundTextStyle": "light",

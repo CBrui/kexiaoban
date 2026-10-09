@@ -13,7 +13,14 @@ module.exports = {
   USE_CLOUD: false,
 
   // 学期第 1 周周一日期（用于周次 → 日期换算），格式 YYYY-MM-DD
+  //
+  // 注意：这是**新建课表时的默认值**。项目支持多张课表，每张课表各自
+  // 保存自己的 term_start_monday 与 total_weeks，实际生效的是当前课表的配置。
+  // 用户可在「我的 → 课表管理」里为每张课表单独设置。
   TERM_START_MONDAY: '2026-09-07',
+
+  // 新建课表时的默认总周数
+  DEFAULT_TOTAL_WEEKS: 20,
 
   // 课表截图上传后的保留周期（天）
   IMAGE_RETENTION_DAYS: 7,
