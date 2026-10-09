@@ -398,8 +398,8 @@ Page({
    * 「回到今天」：带动画地跳回本周
    *
    * 目标在当前位置右侧（周次更大）→ 内容向左滑出、目标从右侧滑入，反之亦然。
-   * 只在目标与当前**相邻**时走「滑一格」；跨多周时用「滑出 → 换轨道 → 从另一侧滑入」三段式，
-   * 避免逐周播放（那会花很久）。
+   * 只在目标与当前**相邻**时走「滑一格」；跨多周时直接换到目标周的轨道、
+   * 再从行进方向的一侧一次性滑入（单段滑动，中间不停顿）。
    */
   onBackToToday() {
     const pos = this.todayPos();
@@ -437,27 +437,26 @@ Page({
       return;
     }
 
-    // 第 1 步：沿目标方向滑出一个面板
-    this.setData({ animate: true, trackPct: -PANEL_PCT * (this.data.trackIndex + s) });
+    // 跨多周：直接换到目标周的轨道，再从行进方向的一侧一次性滑入。
+    //
+    // 这里刻意**不做**「先滑到相邻周、再换轨滑入」的两段滑动 —— 两段各自都会
+    // 减速到静止，中间那次「停住再起步」看上去就是「在相邻周卡一下」。
+    // 方向感改由「滑入方向」给出：从目标的前一站滑进来，用户自然明白往哪边走。
+    const next = this.buildPanels(target);
+    this.setData({
+      currentWeek: target,
+      panels: next.panels,
+      trackIndex: next.trackIndex,
+      animate: false,
+      trackPct: -PANEL_PCT * next.trackIndex + PANEL_PCT * s
+    });
+    this.syncWeekBadge(target);
+    this.updateNowLine();
 
-    // 第 2 步：换成目标周的轨道，并停在「反向另一侧」
-    this._scheduleAnim(TRANSITION_MS, () => {
-      const { panels, trackIndex } = this.buildPanels(target);
-      this.setData({
-        currentWeek: target,
-        panels,
-        trackIndex,
-        animate: false,
-        trackPct: -PANEL_PCT * trackIndex + PANEL_PCT * s
-      });
-      this.syncWeekBadge(target);
-      this.updateNowLine();
-
-      // 第 3 步：下一帧滑入居中
-      this._scheduleAnim(20, () => {
-        this.setData({ animate: true, trackPct: -PANEL_PCT * trackIndex });
-        this._toastBackToToday(pos);
-      });
+    // 下一帧滑入居中
+    this._scheduleAnim(20, () => {
+      this.setData({ animate: true, trackPct: -PANEL_PCT * next.trackIndex });
+      this._toastBackToToday(pos);
     });
   },
 
@@ -512,8 +511,7 @@ Page({
   /**
    * 立即结算未完成的收尾动作（不等过渡播完）。
    *
-   * 跨多周跳转是「滑出 → 换轨 → 滑入」三段式，所以这里要**逐段结算干净**：
-   * 结算完一段后可能又登记了下一段，必须循环到没有待办为止，
+   * 结算一段后有可能又登记了下一段（收尾里再排收尾），所以循环到没有待办为止，
    * 否则残余的那段仍会在拖动过程中触发。
    *
    * 取舍：宁可让画面「一步到位」落到已确定的目标位（一次性），
@@ -733,7 +731,7 @@ Page({
   /**
    * 跳到指定周次（周次面板选择 / 上一周 / 下一周按钮共用）。
    *   - 相邻一周 → 直接滑一格
-   *   - 相距多周 → 沿方向滑出 → 换轨道 → 从另一侧滑入
+   *   - 相距多周 → 直接换到目标周的轨道，再从行进方向一侧一次性滑入（单段滑动）
    */
   goToWeek(target) {
     const current = this.data.currentWeek;
@@ -745,26 +743,22 @@ Page({
       return;
     }
 
-    // 第 1 步：沿目标方向滑出一个面板
-    this.setData({ animate: true, trackPct: -PANEL_PCT * (this.data.trackIndex + s) });
+    // 跨多周：直接换到目标周的轨道，再从行进方向的一侧一次性滑入
+    // （理由同 onBackToToday：两段滑动中间会各停一次，看起来像「卡一下」）
+    const next = this.buildPanels(target);
+    this.setData({
+      currentWeek: target,
+      panels: next.panels,
+      trackIndex: next.trackIndex,
+      animate: false,
+      trackPct: -PANEL_PCT * next.trackIndex + PANEL_PCT * s
+    });
+    this.syncWeekBadge(target);
+    this.updateNowLine();
 
-    // 第 2 步：换成目标周的轨道，并停在「反向另一侧」
-    this._scheduleAnim(TRANSITION_MS, () => {
-      const { panels, trackIndex } = this.buildPanels(target);
-      this.setData({
-        currentWeek: target,
-        panels,
-        trackIndex,
-        animate: false,
-        trackPct: -PANEL_PCT * trackIndex + PANEL_PCT * s
-      });
-      this.syncWeekBadge(target);
-      this.updateNowLine();
-
-      // 第 3 步：下一帧滑入居中
-      this._scheduleAnim(20, () => {
-        this.setData({ animate: true, trackPct: -PANEL_PCT * trackIndex });
-      });
+    // 下一帧滑入居中
+    this._scheduleAnim(20, () => {
+      this.setData({ animate: true, trackPct: -PANEL_PCT * next.trackIndex });
     });
   },
 
