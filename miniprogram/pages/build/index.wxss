@@ -293,3 +293,138 @@
 .btn-disabled {
   opacity: 0.5;
 }
+
+/* ============ 调课（补课 / 换课 / 挪课 / 停课） ============ */
+
+/* 调课说法举例：可点击直接填入并解析 */
+.shift-tips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 16rpx;
+}
+
+.shift-tips-title {
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  margin-right: 8rpx;
+}
+
+.shift-tip {
+  font-size: 22rpx;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: 20rpx;
+  padding: 8rpx 18rpx;
+  margin: 6rpx 8rpx 0 0;
+}
+
+/* 单条调课计划 */
+.shift-plan {
+  border: 1rpx solid var(--color-border);
+  border-radius: 12rpx;
+  padding: 20rpx;
+  margin-top: 20rpx;
+  background: var(--color-bg);
+}
+
+.shift-plan-head {
+  display: flex;
+  align-items: baseline;
+}
+
+.shift-action {
+  flex-shrink: 0;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-primary);
+  border-radius: 6rpx;
+  padding: 4rpx 14rpx;
+  margin-right: 12rpx;
+}
+
+.shift-summary {
+  flex: 1;
+  font-size: 26rpx;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.shift-reason {
+  margin-top: 14rpx;
+  font-size: 24rpx;
+  color: #a3202b;
+}
+
+/* 冲突提示：必须显眼，否则用户不知道课被叠在一起了 */
+.shift-conflict {
+  margin-top: 16rpx;
+  background: #fff7e8;
+  border-radius: 10rpx;
+  padding: 14rpx 18rpx;
+}
+
+.shift-conflict-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #a35b00;
+}
+
+.shift-conflict-row {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #a35b00;
+  line-height: 1.5;
+}
+
+.shift-block {
+  margin-top: 18rpx;
+}
+
+.shift-block-title {
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+}
+
+.shift-row {
+  display: flex;
+  align-items: center;
+  margin-top: 10rpx;
+  font-size: 25rpx;
+}
+
+.shift-name {
+  color: var(--color-text);
+  max-width: 240rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shift-detail {
+  margin-left: 14rpx;
+  font-size: 22rpx;
+  color: var(--color-text-secondary);
+}
+
+.shift-tag {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 21rpx;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: 6rpx;
+  padding: 4rpx 12rpx;
+}
+
+.shift-tag.danger {
+  color: #a3202b;
+  background: #fff1f0;
+}
+
+.shift-tip-line {
+  margin-top: 20rpx;
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+}

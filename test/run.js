@@ -22,6 +22,9 @@ const M = path.resolve(__dirname, '../miniprogram');
 const {
   parseWeeks,
   formatWeeks,
+  removeWeekFromRule,
+  addWeekToRule,
+  weekInRule,
   weekToDate,
   formatDate,
   startOfDay,
@@ -38,6 +41,8 @@ const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRang
 const { colorOf, softOf, buildColorMap, PALETTE } = require(path.join(M, 'utils/color'));
 const schedule = require(path.join(M, 'utils/schedule'));
 const { normalizeProfile } = require(path.join(M, 'api/profile'));
+const { resolveDateExpr } = require(path.join(M, 'logic/shift-date'));
+const shiftLogic = require(path.join(M, 'logic/course-shift'));
 
 let passed = 0;
 let failed = 0;
@@ -1400,6 +1405,185 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('删除不存在的关系 → false', await profileApi.removeFriend('oNOPE'), false);
 
   eq('本地模式清理未分组返回 0（该语义只在云端）', await profileApi.cleanupUngroupedFriends(), 0);
+
+  /* ============ 46. 周次规则编辑（调课的地基） ============ */
+  group('【46】周次规则编辑 removeWeekFromRule / addWeekToRule');
+
+  eq('挖掉中间一周：1-16 - 第5周', removeWeekFromRule('1-16', 5), '1-4,6-16');
+  eq('挖掉首周：1-16 - 第1周', removeWeekFromRule('1-16', 1), '2-16');
+  eq('挖掉末周：1-16 - 第16周', removeWeekFromRule('1-16', 16), '1-15');
+  eq('挖掉唯一一周→空', removeWeekFromRule('5', 5), '');
+  eq('离散周次挖中间', removeWeekFromRule('3,5,7', 5), '3,7');
+  eq('单周规则挖掉其中一周', removeWeekFromRule('1-16 单', 5), '1,3,7,9,11,13,15');
+  eq('挖不存在的周次原样返回', removeWeekFromRule('3,5,7', 6), '3,5,7');
+
+  // round-trip：挖完再解析，必须和期望的周次集合一致（不能出现「挖掉了但还在」）
+  eq('挖掉后剩余周次不含该周',
+    parseWeeks(removeWeekFromRule('1-16', 5)).indexOf(5) !== -1, false);
+  eq('挖掉后其余周次都还在',
+    parseWeeks(removeWeekFromRule('1-16', 5)).length, 15);
+  eq('挖首周后剩余 15 周', parseWeeks(removeWeekFromRule('1-16', 1)).length, 15);
+  eq('单周挖一周后仍是奇数周',
+    parseWeeks(removeWeekFromRule('1-16 单', 5)).every((w) => w % 2 === 1), true);
+
+  eq('加回已挖的周次还原规则', addWeekToRule('1-4,6-16', 5), '1-16');
+  eq('加已存在的周次不重复', addWeekToRule('1-16', 5), '1-16');
+  eq('空规则加一周', addWeekToRule('', 5), '5');
+  eq('周次包含判定', weekInRule('1-16', 5), true);
+  eq('周次不包含判定', weekInRule('1-4,6-16', 5), false);
+
+  /* ============ 47. 相对时间解析 ============ */
+  group('【47】调课相对时间解析 resolveDateExpr');
+
+  // 学期起始 2026-09-07（周一），注入今天 = 2026-10-14（周三，第 6 周）
+  const shiftCtx = {
+    termStartMonday: '2026-09-07',
+    today: new Date(2026, 9, 14, 10, 0, 0),
+    maxWeek: 20
+  };
+
+  const dToday = resolveDateExpr('今天', shiftCtx);
+  eq('今天 → 第6周', dToday.week, 6);
+  eq('今天 → 周三', dToday.dayOfWeek, 3);
+  eq('今天 → 日期', dToday.date, '2026-10-14');
+
+  eq('明天 → 周次', resolveDateExpr('明天', shiftCtx).dayOfWeek, 4);
+  eq('昨天 → 周次', resolveDateExpr('昨天', shiftCtx).dayOfWeek, 2);
+  eq('后天 → 周次', resolveDateExpr('后天', shiftCtx).dayOfWeek, 5);
+
+  // 口径（用户已确认）：「上周二」= 上一自然周的周二 = 第 5 周，不是最近一次周二
+  const dLastTue = resolveDateExpr('上周二', shiftCtx);
+  eq('上周二 → 第5周（上一自然周）', dLastTue.week, 5);
+  eq('上周二 → 周二', dLastTue.dayOfWeek, 2);
+  eq('上周二 → 日期', dLastTue.date, '2026-10-06');
+
+  eq('本周三 → 当前周', resolveDateExpr('本周三', shiftCtx).week, 6);
+  eq('下周一 → 第7周', resolveDateExpr('下周一', shiftCtx).week, 7);
+  eq('上上周 → 第4周', resolveDateExpr('上上周二', shiftCtx).week, 4);
+  eq('裸「周二」→ 当前周', resolveDateExpr('周二', shiftCtx).week, 6);
+  eq('周日 → 星期7', resolveDateExpr('上周日', shiftCtx).dayOfWeek, 7);
+
+  eq('第6周周三 → 周次', resolveDateExpr('第6周周三', shiftCtx).week, 6);
+  eq('第6周周三 → 周三', resolveDateExpr('第6周周三', shiftCtx).dayOfWeek, 3);
+  eq('10月14日 → 第6周', resolveDateExpr('10月14日', shiftCtx).week, 6);
+  eq('ISO 日期 → 第6周', resolveDateExpr('2026-10-14', shiftCtx).week, 6);
+  eq('无日期文本返回 null', resolveDateExpr('高数', shiftCtx), null);
+
+  /* ============ 48. 调课指令解析 ============ */
+  group('【48】调课指令解析 parseShiftInstruction');
+
+  const instAppend = shiftLogic.parseShiftInstruction('今天补上周二的课', shiftCtx);
+  ok('「今天补上周二的课」识别为补课', instAppend && instAppend.action === 'append',
+    instAppend ? instAppend.action : 'null');
+  eq('补课时目标日是今天（第6周）', instAppend.target.week, 6);
+  eq('补课时源日是上周二（第5周）', instAppend.source.week, 5);
+  eq('补课时源日是周二', instAppend.source.dayOfWeek, 2);
+
+  const instReplace = shiftLogic.parseShiftInstruction('今天换成上周二的课', shiftCtx);
+  eq('「换成」识别为换课', instReplace.action, 'replace');
+
+  const instSlots = shiftLogic.parseShiftInstruction('今天补上周二的34节', shiftCtx);
+  eq('「34节」解析为节次 [3,4]', instSlots.sourceSlots, [3, 4]);
+
+  const instRange = shiftLogic.parseShiftInstruction('今天补上周二的3-4节', shiftCtx);
+  eq('「3-4节」解析为节次 [3,4]', instRange.sourceSlots, [3, 4]);
+
+  const instMove = shiftLogic.parseShiftInstruction('周三的高数调到周五第3节', shiftCtx);
+  eq('挪课动作识别', instMove.action, 'move');
+  eq('挪课目标节次', instMove.targetSlots, [3]);
+  eq('挪课提取课程名', instMove.courseName, '高数');
+
+  const instCancel = shiftLogic.parseShiftInstruction('今天没课', shiftCtx);
+  eq('停课动作识别', instCancel.action, 'cancel');
+  eq('停课无源日', instCancel.source, null);
+
+  // 意图路由：建课表述不能被误判成调课
+  eq('「补一节高数」不是调课（无日期）', shiftLogic.looksLikeShift('补一节高数', shiftCtx), false);
+  eq('「周一有高数」不是调课（无动词）', shiftLogic.looksLikeShift('周一有高数', shiftCtx), false);
+  eq('「今天补上周二的课」是调课', shiftLogic.looksLikeShift('今天补上周二的课', shiftCtx), true);
+
+  /* ============ 49. 变更计划生成（含危险路径） ============ */
+  group('【49】调课变更计划 buildShiftPlan');
+
+  // 周二：高数(1-2节) / 英语(3-4节)，周三：物理(1-2节)，均为 1-16 周
+  const demoCourses = [
+    { id: 'a', name: '高等数学', teacher: '张老师', location: 'A101', day_of_week: 2, start_slot: 1, slot_count: 2, weeks: '1-16' },
+    { id: 'b', name: '大学英语', teacher: '李老师', location: 'B202', day_of_week: 2, start_slot: 3, slot_count: 2, weeks: '1-16' },
+    { id: 'c', name: '大学物理', teacher: '王老师', location: 'C303', day_of_week: 3, start_slot: 1, slot_count: 2, weeks: '1-16' }
+  ];
+
+  const planReplace = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('今天换成上周二的课', shiftCtx), demoCourses, shiftCtx);
+  ok('换课计划生成成功', planReplace.ok, planReplace.reason);
+  eq('换课移除当天 1 门', planReplace.removes.length, 1);
+  eq('换课新增源日 2 门', planReplace.adds.length, 2);
+  eq('换课不整条删除（只挖周次）', planReplace.removes[0].willDelete, false);
+  eq('换课把当天那一周挖掉', planReplace.removes[0].nextWeeks, '1-5,7-16');
+  eq('新增课落在目标日周三', planReplace.adds[0].day_of_week, 3);
+  eq('新增课只生效目标周次', planReplace.adds[0].weeks, '6');
+
+  const planAppend = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('今天补上周二的课', shiftCtx), demoCourses, shiftCtx);
+  ok('补课计划生成成功', planAppend.ok, planAppend.reason);
+  eq('补课不移除任何课', planAppend.removes.length, 0);
+  eq('补课新增 2 门', planAppend.adds.length, 2);
+  eq('补课检测到节次冲突', planAppend.conflicts.length, 1);
+  eq('冲突是与已有课撞', planAppend.conflicts[0].withName, '大学物理');
+
+  const planSlots = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('今天补上周二的34节', shiftCtx), demoCourses, shiftCtx);
+  eq('只补34节时只搬 1 门', planSlots.adds.length, 1);
+  eq('只补34节搬的是 3-4 节的英语', planSlots.adds[0].name, '大学英语');
+
+  const planCancel = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('今天没课', shiftCtx), demoCourses, shiftCtx);
+  eq('停课移除当天 1 门', planCancel.removes.length, 1);
+  eq('停课不新增', planCancel.adds.length, 0);
+  eq('停课挖周次而非删记录', planCancel.removes[0].nextWeeks, '1-5,7-16');
+
+  // 危险路径：只有单周生效的课被换掉 → 挖空后允许整条删除
+  const oneWeekCourses = [
+    { id: 'x', name: '单周实验', day_of_week: 3, start_slot: 1, slot_count: 2, weeks: '6' }
+  ];
+  const planDelete = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('今天没课', shiftCtx), oneWeekCourses, shiftCtx);
+  eq('只在该周生效的课被停课后，规则挖空', planDelete.removes[0].nextWeeks, '');
+  eq('规则挖空 → 标记整条删除', planDelete.removes[0].willDelete, true);
+
+  /* ============ 50. 挪课与课程名匹配 ============ */
+  group('【50】挪课与课程名模糊匹配');
+
+  // 简称命中：「大物」= 大[学]物[理]，子序列匹配
+  const planMove = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('周三的大物调到周五第3节', shiftCtx), demoCourses, shiftCtx);
+  ok('简称「大物」命中「大学物理」', planMove.ok, planMove.reason);
+  eq('挪课只挪命中那 1 门', planMove.removes.length, 1);
+  eq('挪课从源日挖掉该周', planMove.removes[0].nextWeeks, '1-5,7-16');
+  eq('挪课新增到目标日周五', planMove.adds[0].day_of_week, 5);
+  eq('挪课落到指定节次', planMove.adds[0].start_slot, 3);
+  eq('挪课周次仍是源日那一周', planMove.adds[0].weeks, '6');
+
+  // 危险路径：课名压根不存在时必须报错，绝不能静默挪一整天的课
+  const planMissing = shiftLogic.buildShiftPlan(
+    shiftLogic.parseShiftInstruction('周三的线代调到周五第3节', shiftCtx), demoCourses, shiftCtx);
+  eq('课名不存在时计划不可执行', planMissing.ok, false);
+  eq('课名不存在时不产生任何移除', planMissing.removes.length, 0);
+  eq('课名不存在时给出原因', typeof planMissing.reason === 'string' && planMissing.reason.length > 0, true);
+
+  eq('全名匹配', shiftLogic.nameMatches('高等数学', '高等数学'), true);
+  eq('子串匹配', shiftLogic.nameMatches('高等数学', '数学'), true);
+  eq('子序列简称匹配', shiftLogic.nameMatches('高等数学', '高数'), true);
+  eq('子序列简称匹配（大物）', shiftLogic.nameMatches('大学物理', '大物'), true);
+  eq('无关课程不匹配', shiftLogic.nameMatches('高等数学', '英语'), false);
+
+  /* ============ 51. 节次解析 ============ */
+  group('【51】节次范围解析 parseSlots');
+
+  eq('34节 → [3,4]', shiftLogic.parseSlots('34节'), [3, 4]);
+  eq('3-4节 → [3,4]', shiftLogic.parseSlots('3-4节'), [3, 4]);
+  eq('第3节 → [3]', shiftLogic.parseSlots('第3节'), [3]);
+  eq('三四节 → [3,4]', shiftLogic.parseSlots('三四节'), [3, 4]);
+  eq('无节次 → null', shiftLogic.parseSlots('上周二的课'), null);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

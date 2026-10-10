@@ -229,8 +229,65 @@ function formatWeeks(weeks) {
   return parts.join(',');
 }
 
+/**
+ * 从周次规则里挖掉某个周次，返回新的规则文本
+ *
+ * 调课的「替换」动作必须用它，而不是直接删课程记录：
+ * 一门 weeks="1-16" 的课，若在第 5 周被换掉，直接 removeCourse 会让它
+ * 在所有周都消失；正确做法是只把第 5 周从规则里剔除（→ "1-4,6-16"）。
+ *
+ * @param {string} weeksText 原规则，如 "1-16"
+ * @param {number} week 要剔除的周次
+ * @returns {string} 新规则文本；剔除后为空则返回 ''
+ */
+function removeWeekFromRule(weeksText, week) {
+  const w = Number(week);
+  if (!w) return String(weeksText == null ? '' : weeksText);
+
+  const weeks = parseWeeks(weeksText);
+  if (!weeks.length) return '';
+
+  const left = weeks.filter((x) => x !== w);
+  return formatWeeks(left);
+}
+
+/**
+ * 往周次规则里补上一个周次，返回新的规则文本
+ *
+ * 用于「补课」：把某门课的生效范围扩展到指定周。已包含时原样返回。
+ *
+ * @param {string} weeksText 原规则，如 "1-16"
+ * @param {number} week 要加入的周次
+ * @returns {string} 新规则文本
+ */
+function addWeekToRule(weeksText, week) {
+  const w = Number(week);
+  if (!w) return String(weeksText == null ? '' : weeksText);
+
+  const weeks = parseWeeks(weeksText);
+  if (weeks.indexOf(w) !== -1) return String(weeksText);
+
+  const merged = weeks.concat([w]).sort((a, b) => a - b);
+  return formatWeeks(merged);
+}
+
+/**
+ * 判断某个周次是否落在周次规则内
+ * @param {string} weeksText
+ * @param {number} week
+ * @returns {boolean}
+ */
+function weekInRule(weeksText, week) {
+  const w = Number(week);
+  if (!w) return false;
+  return parseWeeks(weeksText).indexOf(w) !== -1;
+}
+
 module.exports = {
   parseWeeks,
+  removeWeekFromRule,
+  addWeekToRule,
+  weekInRule,
   weekToDate,
   formatDate,
   formatWeeks,

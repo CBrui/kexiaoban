@@ -6,11 +6,12 @@
  *       微信版本过低（基础库 < 3.15.1）不具备 wx.cloud.extend.AI 时，
  *       自动回退到本页的本地规则解析 localParse()，保证功能不中断。
  */
-const { addCourse } = require('../../api/course');
+const { addCourse, listCourses, updateCourse, removeCourse } = require('../../api/course');
 const timetableApi = require('../../api/timetable');
 const aiApi = require('../../api/ai');
 const { parseWeeks } = require('../../utils/week');
 const { getTotalSlots } = require('../../utils/schedule');
+const shiftLogic = require('../../logic/course-shift');
 
 const app = getApp();
 
@@ -38,6 +39,11 @@ Page({
     parseError: '',
     streamHint: '',          // 流式解析进度提示（打字机效果）
     usedAI: false,           // 本次结果来自 AI 还是本地规则（用于展示来源标识）
+
+    // 调课（补课 / 换课 / 挪课 / 停课）
+    shiftPlans: [],          // 变更计划预览（展示用，已转成 WXML 友好的结构）
+    shiftError: '',
+    _shiftRaw: [],           // 原始计划（含课程引用），执行时用它落库
 
     // 拍照导入
     imagePath: '',           // 已选图片的本地临时路径（用于预览）
@@ -87,6 +93,58 @@ Page({
 
   onSwitchTab(e) {
     this.setData({ tab: e.currentTarget.dataset.tab });
+  },
+
+  /* ================= 调课：补课 / 换课 / 挪课 / 停课 ================= */
+
+  /**
+   * 构建调课所需的学期上下文
+   *
+   * 学期起始周与总周数**以当前课表为准**（多课表各有各的配置），
+   * 课表缺失字段时才回退到全局默认，避免把 A 课表的周次套到 B 课表上。
+   */
+  async buildShiftCtx() {
+    const config = require('../../config');
+    let t = null;
+    try {
+      t = await timetableApi.getCurrentTimetable();
+    } catch (e) {
+      console.warn('[build] 获取当前课表失败，回退全局学期配置', e);
+    }
+
+    return {
+      termStartMonday: (t && t.term_start_monday) || config.TERM_START_MONDAY,
+      maxWeek: Number(t && t.total_weeks) || config.DEFAULT_TOTAL_WEEKS || 20,
+      today: new Date()
+    };
+  },
+
+  /** 把内部计划转成 WXML 可直接渲染的结构（WXML 里不能调函数） */
+  toShiftView(plans) {
+    const DAY_TEXT = ['一', '二', '三', '四', '五', '六', '日'];
+    return (plans || []).map((p) => ({
+      ok: p.ok,
+      reason: p.reason || '',
+      actionText: p.actionText || '调课',
+      summary: p.summary || '',
+      removeList: (p.removes || []).map((r) => ({
+        name: r.name,
+        slotText: r.slotText,
+        nextWeeks: r.nextWeeks,
+        willDelete: !!r.willDelete
+      })),
+      addList: (p.adds || []).map((a) => ({
+        name: a.name,
+        dayText: `周${DAY_TEXT[Number(a.day_of_week) - 1] || '?'}`,
+        slotText: shiftLogic.slotRangeOf(a).join('-'),
+        weeks: a.weeks
+      })),
+      conflictList: (p.conflicts || []).map((c) => ({
+        name: c.name,
+        slotText: c.slotText,
+        withName: c.withName
+      }))
+    }));
   },
 
   /* ---------- 手工录入 ---------- */
@@ -317,6 +375,134 @@ Page({
     this.setData({ dialogText: e.detail.value, parseError: '' });
   },
 
+  /**
+   * 调课管线：解析指令 → 生成变更计划 → 交给用户确认
+   *
+   * 这里只产出计划不落库。「换成」会先把目标日那一周从原课周次规则里挖掉，
+   * 绝不整条删除课程——否则这门课在所有周都会消失。
+   */
+  async runShift(text, ctx) {
+    this.setData({
+      parsing: true,
+      parseError: '',
+      shiftError: '',
+      parsed: [],
+      shiftPlans: [],
+      streamHint: '正在解析…'
+    });
+
+    try {
+      const res = await aiApi.parseShiftInstructions(text, ctx, {
+        onProgress: (chunk, full) => {
+          if (!this.data.parsing) return;
+          this.setData({ streamHint: `正在解析…已生成 ${full.length} 字` });
+        }
+      });
+
+      if (!res.ok) {
+        this.setData({
+          parsing: false,
+          streamHint: '',
+          shiftError: aiApi.messageOf(res.code) || '没读懂这句调课，换个说法试试'
+        });
+        return;
+      }
+
+      const courses = await listCourses();
+      const rawPlans = [];
+      for (const inst of res.list) {
+        rawPlans.push(shiftLogic.buildShiftPlan(inst, courses, ctx));
+      }
+
+      // 原始计划存实例上（含课程引用），不进 data，避免 WXML 遍历到内部字段
+      this._shiftRaw = rawPlans;
+
+      this.setData({
+        parsing: false,
+        streamHint: '',
+        shiftPlans: this.toShiftView(rawPlans),
+        usedAI: res.usedAI
+      });
+    } catch (e) {
+      console.error('[build] 调课解析失败', e);
+      this.setData({
+        parsing: false,
+        streamHint: '',
+        shiftError: aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_ERROR)
+      });
+    }
+  },
+
+  /** 丢弃调课计划 */
+  onCancelShift() {
+    this._shiftRaw = [];
+    this.setData({ shiftPlans: [], shiftError: '' });
+  },
+
+  /** 执行调课计划：挖周 / 删课 / 新增，全部落库 */
+  async onConfirmShift() {
+    const plans = (this._shiftRaw || []).filter((p) => p && p.ok);
+    if (!plans.length) {
+      wx.showToast({ title: '没有可执行的变更', icon: 'none' });
+      return;
+    }
+
+    const conflicts = plans.reduce((n, p) => n + (p.conflicts || []).length, 0);
+
+    wx.showLoading({ title: '正在调整' });
+    let removed = 0;
+    let updated = 0;
+    let added = 0;
+
+    try {
+      for (const p of plans) {
+        for (const r of p.removes || []) {
+          if (r.willDelete) {
+            await removeCourse(r.courseId);
+            removed++;
+          } else {
+            // 只改周次规则，把当天那一周挖掉，其余周次原样保留
+            await updateCourse(r.courseId, { weeks: r.nextWeeks });
+            updated++;
+          }
+        }
+
+        for (const a of p.adds || []) {
+          const rec = Object.assign({}, a);
+          delete rec._from;
+          await addCourse(rec);
+          added++;
+        }
+      }
+
+      wx.hideLoading();
+      wx.showToast({
+        title: `已调整：改 ${updated} · 删 ${removed} · 加 ${added}`,
+        icon: 'none',
+        duration: 2500
+      });
+
+      this._shiftRaw = [];
+      this.setData({ shiftPlans: [], shiftError: '', dialogText: '' });
+
+      if (conflicts) {
+        console.warn('[build] 本次调课存在节次冲突', conflicts);
+      }
+    } catch (e) {
+      wx.hideLoading();
+      console.error('[build] 调课写入失败', e);
+      wx.showToast({ title: '写入失败，请重试', icon: 'none' });
+    }
+  },
+
+  /** 点调课示例：填入输入框并直接跑一遍，让用户马上看到效果 */
+  onUseShiftExample(e) {
+    const t = (e.currentTarget && e.currentTarget.dataset && e.currentTarget.dataset.text) || '';
+    if (!t) return;
+    this.setData({ dialogText: t, parseError: '', shiftError: '' });
+    this.onParse();
+  },
+
   onUseExample() {
     this.setData({
       dialogText: '周一三四节高等数学，王老师，A301，1-16周单周；周三一二节英语，李老师，B203'
@@ -333,6 +519,13 @@ Page({
     if (!text) {
       wx.showToast({ title: '请先说一句你的课表', icon: 'none' });
       return;
+    }
+
+    // 意图路由：带调课动词且能找到日期 → 走调课管线，否则走原建课管线。
+    // 放在这里而不是解析之后，是为了让「今天补上周二的课」不被当成新增课程。
+    const shiftCtx = await this.buildShiftCtx();
+    if (shiftLogic.looksLikeShift(text, shiftCtx)) {
+      return this.runShift(text, shiftCtx);
     }
 
     this.setData({
