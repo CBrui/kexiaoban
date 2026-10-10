@@ -1171,11 +1171,27 @@ Page({
     }
   },
 
-  onRetry() {
+  async onRetry() {
     if (this.data.error) {
       this.loadCourses();
-    } else {
-      app.retryLogin().then(() => this.loadCourses());
+      return;
+    }
+    // 非错误态时这里是手动「重新登录 / 同步」入口。
+    // retryLogin 失败会抛错，必须自行兜住 —— 否则会变成未处理的 Promise 拒绝。
+    if (this._relogging) return;
+    this._relogging = true;
+    wx.showLoading({ title: '正在重新登录…', mask: true });
+    try {
+      await app.retryLogin();
+      await this.loadCourses();
+      wx.hideLoading();
+      wx.showToast({ title: '已重新登录', icon: 'success' });
+    } catch (e) {
+      wx.hideLoading();
+      console.error('[timetable] 重新登录失败', e);
+      wx.showToast({ title: '重新登录失败，请检查网络后重试', icon: 'none' });
+    } finally {
+      this._relogging = false;
     }
   },
 

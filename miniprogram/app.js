@@ -41,15 +41,7 @@ App({
    */
   async checkLogin() {
     try {
-      await this.refreshWxSession();
-      const profile = await ensureProfile();
-      this.globalData.user = profile;
-      this.globalData.openid = profile
-        ? (profile.owner_id || profile._openid || profile.id || null)
-        : null;
-      if (!this.globalData.openid) {
-        console.warn('[app] 未取得用户标识 owner_id，部分协作功能（找搭子）将不可用');
-      }
+      await this.loginIdentity();
     } catch (err) {
       console.error('[app] 登录失败', err);
       // 登录失败不阻断页面渲染，由页面给出重试入口
@@ -57,6 +49,27 @@ App({
       this.globalData.ready = true;
       this.flushReady();
     }
+  },
+
+  /**
+   * 真正执行登录链路，**失败时向上抛错**。
+   *
+   * 为什么拆出来：onLaunch 的 checkLogin 需要吞掉错误（不阻断渲染），
+   * 而「重新登录 / 同步」这类手动入口需要把失败透出给界面做提示 ——
+   * 两种诉求靠「一个会抛错的内部实现 + 各自的错误处理」满足，
+   * 避免手动重试时失败被静默吃掉（点了像没反应）。
+   */
+  async loginIdentity() {
+    await this.refreshWxSession();
+    const profile = await ensureProfile();
+    this.globalData.user = profile;
+    this.globalData.openid = profile
+      ? (profile.owner_id || profile._openid || profile.id || null)
+      : null;
+    if (!this.globalData.openid) {
+      throw new Error('未取得用户标识 owner_id，协作功能（找搭子）将不可用');
+    }
+    return profile;
   },
 
   /**
@@ -105,11 +118,18 @@ App({
   },
 
   /**
-   * 手动重试登录（提供给「云接口失败」的异常兜底）
+   * 手动重新登录（「重新登录 / 同步」入口）。
+   *
+   * 与 checkLogin 的区别：**失败会向上抛出**，调用方据此给出成功/失败提示。
+   * 旧实现在失败时同样是静默的 —— 点了没有任何反馈，看起来「没效果」。
    */
   async retryLogin() {
     this.globalData.ready = false;
-    await this.checkLogin();
-    return this.globalData.user;
+    try {
+      return await this.loginIdentity();
+    } finally {
+      this.globalData.ready = true;
+      this.flushReady();
+    }
   }
 });

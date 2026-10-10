@@ -107,10 +107,16 @@ async function ensureProfileCloud(db) {
       data: { action: 'login' }
     });
     const r = (res && res.result) || null;
-    if (r && r.ok && r.profile) {
+    // 只有拿到平台真实身份 `_openid` 的档案才可信。
+    // 旧版 auth 服务端建档没有写 `_openid`（历史坑），返回的 owner_id 会退化成
+    // 档案文档 _id，与课程真实的 `_openid` 对不上 —— 找搭子必然读不到对方课程，
+    // 且表现为「老用户正常、新用户不行」。遇到这种情况一律回退到客户端建档链路，
+    // 由客户端建出带正确 `_openid` 的档案，从而自愈。
+    if (r && r.ok && r.profile && r.profile._openid) {
       return normalizeProfile(r.profile);
     }
-    console.warn('[profile] auth.login 未成功，回退客户端建档链路', r && (r.error || r.message));
+    console.warn('[profile] auth.login 未返回有效身份（缺少 _openid），回退客户端建档链路',
+      r && (r.error || r.message || r.profile));
   } catch (e) {
     console.warn('[profile] auth 云函数不可用（可能未部署），回退客户端建档链路', e);
   }
