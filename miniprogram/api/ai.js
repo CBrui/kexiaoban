@@ -19,6 +19,8 @@
 
 const { parseWeeks } = require('../utils/week');
 const { getTotalSlots } = require('../utils/schedule');
+const { resolveDateExpr } = require('../logic/shift-date');
+const { parseShiftInstruction, parseSlots, ACTION_TEXT } = require('../logic/course-shift');
 
 // 免费体验模型。正式上线要换售卖模型时改这里即可（如 hy3 / deepseek-v4-flash）。
 const DEFAULT_MODEL = 'hy3';
@@ -57,6 +59,45 @@ const SYSTEM_PROMPT = [
   '5. slot_count 在用户只说了一个节次时填 1，说了一个区间或连续节次时按实际跨度填。',
   '6. 如果整段话里没有任何可识别的课程，输出空数组 []。'
 ].join('\n');
+
+/* ================= 调课通知解析 ================= */
+
+/**
+ * 调课指令解析的系统提示词
+ *
+ * 关键：要求模型**只输出日期的原文表述**，不要自己换算成「第几周」。
+ * 周次换算依赖学期起始日（每张课表还不一样），模型算不准，
+ * 交给本地 resolveDateExpr 按课表配置换算才可靠。
+ */
+const SHIFT_SYSTEM_PROMPT = [
+  '你是一个课表调课通知解析助手。用户会给你一句调课要求，或一段教务处发布的调课/调休通知。',
+  '你要把它解析成结构化 JSON 数组，一条变更对应一个元素。',
+  '',
+  '严格输出一个 JSON 数组，不要输出任何解释文字，不要加 markdown 代码块标记。',
+  '数组中每个元素字段固定为：',
+  '{',
+  '  "action": "动作，只能是 replace / append / move / cancel 之一",',
+  '  "target": "被改的那一天，用原文里的说法，如 今天 / 10月14日 / 下周一",',
+  '  "source": "取课的那一天，用原文里的说法，如 上周二；停课时填 null",',
+  '  "course": "课程名，只有 move 需要填，其余填 null",',
+  '  "slots": "节次范围，如 34 或 3-4 或 第3节；不指定填 null"',
+  '}',
+  '',
+  '动作含义：',
+  '- replace：目标日改成源日的课（先清空目标日，再放上源日的课）',
+  '- append：目标日追加源日的课（保留目标日原有课）',
+  '- move：把源日那一门课挪到目标日',
+  '- cancel：目标日停课（当天没课）',
+  '',
+  '规则：',
+  '1. 日期一律用原文里的说法原样输出，绝对不要自己换算成日期或第几周。',
+  '2. 一段通知里的多个变更要拆成多条，不要合并。',
+  '3. 无法确定动作或日期的条目直接丢弃，不要猜测。',
+  '4. 如果整段话里没有任何调课信息，输出空数组 []。'
+].join('\n');
+
+/** 短句是单条指令，长文本像通知，直接交给模型 */
+const SHIFT_LOCAL_MAX_LEN = 30;
 
 /* ================= 能力探测 ================= */
 
@@ -419,6 +460,141 @@ async function parseCourses(text, options = {}) {
   }
 
   return { ok: true, list, code: '', message: '' };
+}
+
+/**
+ * 把模型输出的调课条目规整成本地指令结构
+ *
+ * 日期由本地按课表配置换算（模型不知道学期起始日，也不该让它算周次）。
+ * @returns {object[]}
+ */
+function normalizeShiftList(rawList, ctx) {
+  const arr = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
+  const out = [];
+
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+
+    const action = ['replace', 'append', 'move', 'cancel'].indexOf(item.action) !== -1
+      ? item.action
+      : null;
+    if (!action) continue;
+
+    const target = resolveDateExpr(pick(item, ['target', 'date', '目标']), ctx);
+    if (!target) continue;
+
+    let source = null;
+    if (action !== 'cancel') {
+      source = resolveDateExpr(pick(item, ['source', 'from', '源']), ctx);
+      if ((action === 'replace' || action === 'append') && !source) continue;
+      if (action === 'move' && !source) continue;
+    }
+
+    // 节次：模型可能给数组 [3,4]，也可能给 "34" / "3-4" / "第3节"
+    const slotsRaw = pick(item, ['slots', '节次']);
+    let slots = null;
+    if (Array.isArray(slotsRaw)) {
+      slots = slotsRaw.map(Number).filter((n) => n >= 1 && n <= 24);
+      if (!slots.length) slots = null;
+    } else if (slotsRaw) {
+      slots = parseSlots(`${slotsRaw}节`);
+    }
+
+    out.push({
+      action,
+      actionText: ACTION_TEXT[action] || '调课',
+      target,
+      source,
+      // 换/补：slots 限定「只搬源日的这几节」；挪：slots 指挪到目标日的第几节
+      sourceSlots: action === 'replace' || action === 'append' ? slots : null,
+      targetSlots: action === 'move' ? slots : null,
+      courseName: action === 'move' ? pick(item, ['course', 'name', '课程']) : null,
+      raw: ''
+    });
+  }
+
+  return out;
+}
+
+/**
+ * 解析调课指令 / 调休通知
+ *
+ * 短句（如「今天补上周二的课」）先走本地规则：零耗时、不依赖网络；
+ * 长文本（通知）走大模型拆成多条。
+ *
+ * @param {string} text 用户输入
+ * @param {object} ctx { termStartMonday, today, maxWeek }
+ * @returns {Promise<{ok:boolean, list:object[], usedAI:boolean, code:string, message:string}>}
+ */
+async function parseShiftInstructions(text, ctx, options = {}) {
+  const cleaned = preprocess(text);
+  if (!cleaned) return fail(PARSE_ERROR.EMPTY_INPUT);
+
+  // 短句优先本地解析（无换行、无分号、长度短）
+  const looksShort = cleaned.length <= SHIFT_LOCAL_MAX_LEN && !/[\n；;]/.test(cleaned);
+  if (looksShort || !ctx) {
+    const local = parseShiftInstruction(cleaned, ctx);
+    if (local) {
+      return { ok: true, list: [local], usedAI: false, code: '', message: '' };
+    }
+    if (!ctx) return fail(PARSE_ERROR.NO_COURSE);
+  }
+
+  const provider = options.modelProvider || getAIClient();
+  if (!provider || typeof provider.createModel !== 'function') {
+    // 没有 AI 能力时退回本地再试一次，长通知可能只能解出第一条
+    const local = parseShiftInstruction(cleaned, ctx);
+    if (local) return { ok: true, list: [local], usedAI: false, code: '', message: '' };
+    return fail(PARSE_ERROR.AI_UNAVAILABLE);
+  }
+
+  let raw = '';
+  try {
+    const model = provider.createModel(PROVIDER);
+    const res = await model.streamText({
+      data: {
+        model: options.model || DEFAULT_MODEL,
+        messages: [
+          { role: 'system', content: SHIFT_SYSTEM_PROMPT },
+          { role: 'user', content: cleaned }
+        ]
+      }
+    });
+
+    if (res && res.textStream) {
+      for await (const chunk of res.textStream) {
+        raw += chunk;
+        if (typeof options.onProgress === 'function') {
+          try {
+            options.onProgress(chunk, raw);
+          } catch (e) {
+            console.warn('[ai] onProgress 回调异常', e);
+          }
+        }
+      }
+    } else if (res && typeof res === 'string') {
+      raw = res;
+    }
+  } catch (err) {
+    console.error('[ai] 调课解析模型调用失败', err);
+    return fail(PARSE_ERROR.MODEL_ERROR);
+  }
+
+  const parsed = extractJSON(raw);
+  if (parsed === null) {
+    console.warn('[ai] 调课解析输出无法解析为 JSON', raw);
+    return fail(PARSE_ERROR.BAD_OUTPUT);
+  }
+
+  const list = normalizeShiftList(parsed, ctx);
+  if (!list.length) {
+    // 模型没解出来，再给本地规则一次机会
+    const local = parseShiftInstruction(cleaned, ctx);
+    if (local) return { ok: true, list: [local], usedAI: false, code: '', message: '' };
+    return fail(PARSE_ERROR.NO_COURSE);
+  }
+
+  return { ok: true, list, usedAI: true, code: '', message: '' };
 }
 
 /** 总大节数；作息配置异常时兜底 6，避免校验直接把所有结果判越界 */
@@ -789,5 +965,9 @@ module.exports = {
   SYSTEM_PROMPT,
   // 两阶段识别（P2）：版式规则解析与「整表统一周次」兜底
   parseLayout,
-  globalWeeksOf
+  globalWeeksOf,
+  // 调课（补课 / 换课 / 挪课 / 停课）：支持单句指令与整段调休通知批量拆解
+  parseShiftInstructions,
+  normalizeShiftList,
+  SHIFT_SYSTEM_PROMPT
 };

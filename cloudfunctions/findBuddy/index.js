@@ -79,6 +79,32 @@ async function findProfile(inviteCode) {
  * 提示语需要区分（前者该去建表，后者该去录课程），因此这里顺手统计一下
  * 对方的课表数，把判断依据一并回传，避免客户端只能笼统地报「没建课表」。
  */
+/**
+ * 分页取全某人的课程。
+ *
+ * 云函数端单次 get() 上限是 100 条（客户端只有 20 条），超出部分同样被静默丢弃。
+ * 调课产生的「单日例外」记录会持续累积（每调一次课就新增若干条），课程数是
+ * 有可能突破 100 的，所以这里显式分页取全，不依赖默认上限。
+ */
+async function fetchAllCourses(openid) {
+  const all = [];
+  let skip = 0;
+  for (;;) {
+    const res = await db
+      .collection(COURSES)
+      .where({ _openid: openid })
+      .skip(skip)
+      .limit(100)
+      .get();
+    const batch = res.data || [];
+    for (let i = 0; i < batch.length; i++) all.push(batch[i]);
+    if (batch.length < 100) break;
+    skip += batch.length;
+    if (skip >= 5000) break;
+  }
+  return all;
+}
+
 async function getCourses(friendOwnerId, myOwnerId) {
   const fid = String(friendOwnerId || '').trim();
   if (!fid) return fail('INVALID_FRIEND', '缺少对方身份标识');
@@ -99,8 +125,7 @@ async function getCourses(friendOwnerId, myOwnerId) {
     return fail('NO_RELATION', '尚未与该同学建立关系，无法读取其课表');
   }
 
-  const res = await db.collection(COURSES).where({ _openid: fid }).get();
-  const courses = res.data || [];
+  const courses = await fetchAllCourses(fid);
 
   // 对方是否至少有一张课表（用于区分「没建课表」与「课表没录课程」）。
   // 统计失败不影响课程返回，降级为「未知」（按 false 处理即可）。
