@@ -1273,6 +1273,41 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('多人网格：空课表同学不占用 → partial', gme.grid[1][0][0].state, 'partial');
   eq('多人网格：空课表同学计入空闲数', gme.grid[1][0][0].freeCount, 1);
 
+  /* ============ 45. 手动「重新登录 / 同步」的失败透传 ============ */
+  // 旧实现 retryLogin() 内部再调 checkLogin()，而 checkLogin 会把错误全部吞掉，
+  // 于是「我的 → 重新登录 / 同步」失败时也毫无反馈，点上去像没反应。
+  // 现在拆成 loginIdentity()（会抛错）+ 两种错误处理：checkLogin 吞错、retryLogin 透传。
+  group('【45】retryLogin / checkLogin 失败处理');
+
+  // 先让云库 / 云函数全部不可用（注意要在 initClient 之前替换 wx.cloud）
+  global.wx.cloud = {
+    init() {},
+    database() { throw new Error('模拟云库不可用'); },
+    callFunction() { return Promise.reject(new Error('模拟云函数不可用')); }
+  };
+  clientApi.initClient({ useCloud: true, envId: 'test-env' });
+  eq('客户端已切到云模式', clientApi.getMode(), 'cloud');
+
+  // app.js 在模块加载时执行 App({...})，这里桩住全局 App / getApp
+  global.App = (o) => { global.__kxbApp = o; };
+  global.getApp = () => global.__kxbApp;
+  require(path.join(M, 'app'));
+  const appObj = global.__kxbApp;
+  ok('app.js 注册出 App 实例', !!appObj);
+
+  let checkErr = null;
+  try { await appObj.checkLogin(); } catch (e) { checkErr = e; }
+  eq('checkLogin 吞掉登录错误（不阻断渲染）', checkErr, null);
+  eq('checkLogin 完成后 ready=true', appObj.globalData.ready, true);
+
+  let retryErr = null;
+  try { await appObj.retryLogin(); } catch (e) { retryErr = e; }
+  ok('retryLogin 把失败抛给调用方（供界面提示）', !!retryErr);
+  eq('retryLogin 失败后 ready 仍恢复为 true', appObj.globalData.ready, true);
+
+  ok('登录失败时不再写入 user（避免用错误身份继续跑）',
+    appObj.globalData.user === null || appObj.globalData.user === undefined);
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);

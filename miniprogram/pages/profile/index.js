@@ -167,7 +167,34 @@ Page({
     });
   },
 
-  onRetry() {
-    app.retryLogin().then(() => this.loadData());
+  /**
+   * 重新登录 / 同步。
+   *
+   * 真正重跑一遍登录链路（wx 会话 → 服务端登录 → 档案），再重新拉取本页数据。
+   * 旧实现只有 `retryLogin().then(() => loadData())` —— 既没有加载反馈、也不处理失败，
+   * 而本页数据在重登后通常没变化，于是点上去界面毫无动静，看起来「没效果」。
+   * 这里补上：加载提示 + 成功/失败提示 + 防重复点击。
+   */
+  async onRetry() {
+    if (this._relogging) return;
+    this._relogging = true;
+
+    wx.showLoading({ title: '正在重新登录…', mask: true });
+    try {
+      const user = await app.retryLogin();
+      await this.loadData();
+      wx.hideLoading();
+      const ok = !!(user && user.owner_id);
+      wx.showToast({
+        title: ok ? '已重新登录' : '登录未完成，请检查网络',
+        icon: ok ? 'success' : 'none'
+      });
+    } catch (e) {
+      wx.hideLoading();
+      console.error('[profile] 重新登录失败', e);
+      wx.showToast({ title: '重新登录失败，请检查网络后重试', icon: 'none' });
+    } finally {
+      this._relogging = false;
+    }
   }
 });
