@@ -83,9 +83,15 @@ async function getCourses(friendOwnerId, myOwnerId) {
   if (!fid) return fail('INVALID_FRIEND', '缺少对方身份标识');
   if (fid === myOwnerId) return fail('SELF', '不能和自己找搭子');
 
-  // 授权校验：必须已建立「我 → 对方」的绑定关系（relations 由客户端写入）
+  // 授权校验：必须已建立「我 → 对方」的绑定关系（relations 由客户端写入）。
+  // 用 `_openid`（平台按调用者身份自动写入，客户端不可伪造、也不会随业务字段变动）
+  // 作为主判据；再兜一层 `owner_id`，兼容历史上把身份写进 owner_id 的关系记录。
+  const _ = db.command;
   const rel = await db.collection(RELATIONS)
-    .where({ owner_id: myOwnerId, friend_owner_id: fid })
+    .where(_.or([
+      { _openid: myOwnerId, friend_owner_id: fid },
+      { owner_id: myOwnerId, friend_owner_id: fid }
+    ]))
     .limit(1)
     .get();
   if (!rel.data || !rel.data.length) {
@@ -113,27 +119,68 @@ async function getCourses(friendOwnerId, myOwnerId) {
  * 为什么走云函数：relations 只有「我 → 对方」方向的文档能被我读到，
  * 但对方的 profiles 是 PRIVATE 的，昵称必须由服务端补齐。
  * 只回传与我存在绑定关系的同学的展示字段，不透出其它任何数据。
+ *
+ * ⚠️ 昵称为什么要「多级兜底」（踩过的坑）：
+ *   关系表里存的是**绑定那一刻**对方的 `owner_id`。而历史上服务端建档没有写
+ *   `_openid`，导致新用户每次登录都会新建一份档案、身份（owner_id）随之改变 ——
+ *   于是老绑定指向的 id 再也解析不到对方档案，名字就退化成「同学+身份尾号」，
+ *   看起来像「名字也跟着邀请码一起变了」。
+ *   这里做两件事把名字尽量找回来：
+ *     1. 档案解析同时按 `_openid` / `owner_id` / `_id` 三种键命中
+ *        （兼容「客户端建档」「服务端建档」以及身份退化成文档 _id 的历史数据）；
+ *     2. 仍解析不到时，回退到**绑定当时存进关系表的 `friend_nickname`**，
+ *        而不是直接给空——空会让客户端拿会变的身份尾号凑名字。
+ *   注意：这只修复「显示名」。若对方身份确实已变，读其课程仍会失败，
+ *   需要对方重新分享邀请码、重新绑定一次（见 README「登录与身份」）。
  */
 async function listFriends(openid) {
-  const rels = await db.collection(RELATIONS).where({ owner_id: openid }).get();
-  const ids = Array.from(new Set(
-    (rels.data || []).map((r) => r && r.friend_owner_id).filter(Boolean)
-  ));
+  const _ = db.command;
+
+  // 关系表由客户端 bindFriend 写入，平台会自动带上 `_openid`，用它查最可靠；
+  // 再兜一层 `owner_id`，兼容把身份写在 owner_id 的关系记录。
+  const rels = await db.collection(RELATIONS)
+    .where(_.or([{ _openid: openid }, { owner_id: openid }]))
+    .get();
+
+  const relList = (rels.data || []).filter((r) => r && r.friend_owner_id);
+  const ids = Array.from(new Set(relList.map((r) => r.friend_owner_id)));
   if (!ids.length) return ok({ friends: [] });
 
-  const _ = db.command;
-  const res = await db.collection(PROFILES).where({ _openid: _.in(ids) }).get();
+  // 以关系表为准（保证顺序与去重），并按好友 id 建索引，供昵称兜底
+  const relByFriend = {};
+  relList.forEach((r) => {
+    if (!relByFriend[r.friend_owner_id]) relByFriend[r.friend_owner_id] = r;
+  });
 
-  // 以关系表为准（保证顺序与去重），档案缺失的同学回退为空昵称
+  // 档案解析：三种身份键都试（解析失败不影响返回，改用关系表昵称兜底）
+  let docs = [];
+  try {
+    const res = await db.collection(PROFILES).where(_.or([
+      { _openid: _.in(ids) },
+      { owner_id: _.in(ids) },
+      { _id: _.in(ids) }
+    ])).get();
+    docs = res.data || [];
+  } catch (e) {
+    console.warn('[findBuddy] 解析同学档案失败，改用关系表昵称兜底', e);
+  }
+
+  // 一份档案可能同时被多个键命中，三个键都登记，谁先到用谁
   const byId = {};
-  (res.data || []).forEach((doc) => { byId[ownerIdOf(doc)] = doc; });
+  docs.forEach((doc) => {
+    [doc._openid, doc.owner_id, doc._id].forEach((k) => {
+      if (k && !byId[k]) byId[k] = doc;
+    });
+  });
 
   const friends = ids.map((id) => {
     const doc = byId[id] || {};
+    const rel = relByFriend[id] || {};
     return {
       owner_id: id,
-      nickname: doc.nickname || '',
-      avatar_url: doc.avatar_url || '',
+      // 名字三级兜底：当前档案 → 绑定当时存的昵称 → 交给客户端用身份尾号兜底
+      nickname: doc.nickname || rel.friend_nickname || '',
+      avatar_url: doc.avatar_url || rel.friend_avatar_url || '',
       college: doc.college || '',
       major: doc.major || '',
       class_name: doc.class_name || ''
