@@ -33,7 +33,7 @@ const {
   isToday
 } = require(path.join(M, 'utils/week'));
 const { expandCourse, expandAll, toWeekGrid } = require(path.join(M, 'logic/course-expand'));
-const { alignFree, alignFreeWithRange, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
+const { alignFree, alignFreeWithRange, alignGrid, alignFreeMulti, alignGridMulti, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
 const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRange } = require(path.join(M, 'logic/dnd-rule'));
 const { colorOf, softOf, buildColorMap, PALETTE } = require(path.join(M, 'utils/color'));
 const schedule = require(path.join(M, 'utils/schedule'));
@@ -1180,6 +1180,98 @@ const storeApi = require(path.join(M, 'api/store'));
     }
   });
   ok('完整模式：未传 layout:false', !normalArg || normalArg.layout !== false);
+
+  /* ============ 【43】找搭子可视化网格 alignGrid ============ */
+  group('【43】找搭子可视化网格 alignGrid');
+
+  // —— 双方同课 → 撞课；其它格 → 空闲 ——
+  const g1 = alignGrid(
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-2' }],
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-2' }]
+  );
+  eq('网格：双方同课 → 撞课', g1.grid[1][0][0], 'clash');
+  eq('网格：周二第 1 节都空 → 空闲', g1.grid[1][1][0], 'free');
+
+  // —— 四态区分 ——
+  const g2 = alignGrid(
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' }],
+    [{ day_of_week: 2, start_slot: 1, slot_count: 1, weeks: '1-1' }]
+  );
+  eq('网格：只有我忙 → mine', g2.grid[1][0][0], 'mine');
+  eq('网格：只有对方忙 → theirs', g2.grid[1][1][0], 'theirs');
+  eq('网格：双方都空 → free', g2.grid[1][2][0], 'free');
+
+  // —— 起床/就寝裁剪：范围外是 out，不参与高亮/标灰 ——
+  const g3 = alignGrid(
+    [{ day_of_week: 1, start_slot: 2, slot_count: 1, weeks: '1-1' }],
+    [],
+    { slotCount: 4, wakeSlot: 2, sleepSlot: 3 }
+  );
+  eq('网格：起床前 → out', g3.grid[1][0][0], 'out');
+  eq('网格：就寝后 → out', g3.grid[1][0][3], 'out');
+  eq('网格：范围内都空 → free', g3.grid[1][0][2], 'free');
+  eq('网格：slotCount 回传', g3.slotCount, 4);
+
+  // —— 单双周：单周课不能误占偶数周 ——
+  const g4 = alignGrid(
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-3 单' }],
+    [{ day_of_week: 2, start_slot: 1, slot_count: 1, weeks: '1-3' }]
+  );
+  eq('网格：单周课在奇数周占用（周1周一=我忙）', g4.grid[1][0][0], 'mine');
+  eq('网格：单周课在偶数周不占用（周2周一=空闲）', g4.grid[2][0][0], 'free');
+  eq('网格：周次并集且升序', g4.weeks.join(','), '1,2,3');
+
+  /* ============ 【44】多人课表共享（N 人对齐） ============ */
+  group('【44】多人课表共享（N 人对齐）');
+
+  // —— alignFreeMulti：全员都空才算空闲 ——
+  // 3 人分别占周一第 1/2/3 节，则周一前 3 节都不算共同空闲
+  const m1 = alignFreeMulti([
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' }],
+    [{ day_of_week: 1, start_slot: 2, slot_count: 1, weeks: '1-1' }],
+    [{ day_of_week: 1, start_slot: 3, slot_count: 1, weeks: '1-1' }]
+  ]);
+  const mw1 = m1.result.find((r) => r.week === 1);
+  ok('多人：周一第 1 节有人忙，不算共同空闲',
+    !!mw1 && !mw1.slots.some((s) => s.day === 1 && s.from === 1), JSON.stringify(mw1));
+  ok('多人：周一第 4 节起全员空闲',
+    !!mw1 && mw1.slots.some((s) => s.day === 1 && s.from === 4), JSON.stringify(mw1));
+  ok('多人：其余天全员空闲',
+    !!mw1 && mw1.slots.some((s) => s.day === 2 && s.from === 1), JSON.stringify(mw1));
+
+  // —— alignGridMulti：free / partial / clash 三态 + 空闲计数 ——
+  // 注意入参是「每人一个课程列表」的数组：[[A 的课程], [B 的课程], [C 的课程]]
+  const gm = alignGridMulti([
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' }],
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' }],
+    [
+      { day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' },
+      { day_of_week: 2, start_slot: 1, slot_count: 1, weeks: '1-1' }
+    ]
+  ], { slotCount: 4 });
+  eq('多人网格：全员忙 → clash', gm.grid[1][0][0].state, 'clash');
+  eq('多人网格：全员忙时空闲数为 0', gm.grid[1][0][0].freeCount, 0);
+  eq('多人网格：只有 C 忙 → partial', gm.grid[1][1][0].state, 'partial');
+  eq('多人网格：partial 空闲 2/3', gm.grid[1][1][0].freeCount, 2);
+  eq('多人网格：全员空 → free', gm.grid[1][0][1].state, 'free');
+  eq('多人网格：total 回传参与人数', gm.total, 3);
+
+  // —— 起床/就寝裁剪：范围 2~3 节，课程在第 2 节 ——
+  const gmo = alignGridMulti(
+    [[{ day_of_week: 1, start_slot: 2, slot_count: 1, weeks: '1-1' }]],
+    { slotCount: 3, wakeSlot: 2, sleepSlot: 3 }
+  );
+  eq('多人网格：起床前（第 1 节）→ out', gmo.grid[1][0][0].state, 'out');
+  eq('多人网格：就寝节次本身在范围内（第 3 节）→ free', gmo.grid[1][0][2].state, 'free');
+  eq('多人网格：范围内单人自己忙 → clash（1/1 忙）', gmo.grid[1][0][1].state, 'clash');
+
+  // —— 空课表同学视为始终空闲（页面会先跳过没建课表的同学，这里是算法层语义） ——
+  const gme = alignGridMulti(
+    [[{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' }], []],
+    { slotCount: 2 }
+  );
+  eq('多人网格：空课表同学不占用 → partial', gme.grid[1][0][0].state, 'partial');
+  eq('多人网格：空课表同学计入空闲数', gme.grid[1][0][0].freeCount, 1);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

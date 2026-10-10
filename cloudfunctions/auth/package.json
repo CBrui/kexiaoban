@@ -1,0 +1,9 @@
+{
+  "name": "auth",
+  "version": "1.0.0",
+  "description": "微信登录：服务端以 OPENID 为身份锚点找/建用户档案（邀请码服务端查重）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

@@ -22,6 +22,37 @@
   margin-right: 24rpx;
 }
 
+/* 头像选择按钮（open-type="chooseAvatar"）：去掉 button 默认样式 */
+.avatar-btn {
+  padding: 0;
+  margin: 0 24rpx 0 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 108rpx;
+  height: 108rpx;
+}
+
+.avatar-btn::after {
+  border: none;
+}
+
+.avatar-img {
+  width: 108rpx;
+  height: 108rpx;
+  border-radius: 50%;
+  display: block;
+}
+
+.login-state {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 20rpx;
+  color: var(--color-text-tertiary);
+}
+
 .user-name {
   display: block;
   font-size: 34rpx;

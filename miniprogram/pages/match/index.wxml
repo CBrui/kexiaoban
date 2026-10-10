@@ -2,11 +2,31 @@
 
   <!-- 输入区 -->
   <view class="card">
-    <view class="section-title">输入对方邀请码</view>
+    <view class="section-title">选择要一起比对的同学</view>
+
+    <!-- 已绑定同学多选 -->
+    <view wx:if="{{friendChips.length}}" class="friend-chips">
+      <view
+        class="chip {{item.selected ? 'chip-on' : ''}}"
+        wx:for="{{friendChips}}"
+        wx:for-item="item"
+        wx:for-index="idx"
+        wx:key="owner_id"
+        data-idx="{{idx}}"
+        bindtap="onToggleFriend"
+        hover-class="chip-hover"
+      >
+        <text>{{item.nickname}}</text>
+      </view>
+    </view>
+    <view wx:else class="chips-empty">
+      <text>还没有绑定的同学，输入对方邀请码即可添加</text>
+    </view>
+
     <view class="code-row">
       <input
         class="code-input"
-        placeholder="6 位邀请码"
+        placeholder="邀请码临时添加一位同学"
         value="{{inviteCode}}"
         bindinput="onInputCode"
         maxlength="6"
@@ -28,7 +48,7 @@
         </picker>
       </view>
     </view>
-    <text class="hint">起床/就寝节次用于裁掉你不参与的时段，让结果更实用</text>
+    <text class="hint">起床/就寝节次用于裁掉你不参与的时段；「空闲」按全员都空计算</text>
   </view>
 
   <!-- 兜底提示 -->
@@ -38,23 +58,79 @@
     <view wx:if="{{tipType === 'error'}}" class="tip-action" bindtap="onRetry">重试</view>
   </view>
 
-  <!-- 结果区 -->
-  <view wx:if="{{result.length}}" class="card">
-    <view class="section-title">共同空闲（{{resultCount}} 个周次）</view>
-    <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
-      <view class="week-group-head">
-        <text class="week-badge">第 {{group.week}} 周</text>
+  <!-- 结果区：可视化网格 -->
+  <view wx:if="{{hasGrid}}" class="card">
+    <view class="section-title">空闲对齐图 · 共 {{freeSegments}} 段共同空闲</view>
+    <view class="participants">{{participantsLabel}}</view>
+    <view wx:if="{{skippedNote}}" class="skip-note">{{skippedNote}}</view>
+
+    <!-- 图例：2 人 / 多人 各自的口径 -->
+    <view class="legend">
+      <block wx:if="{{gridMode === 'duo'}}">
+        <view class="legend-item"><view class="legend-swatch legend-free"></view><text>都有空</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-clash"></view><text>撞课</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-mine"></view><text>我忙</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-theirs"></view><text>对方忙</text></view>
+      </block>
+      <block wx:else>
+        <view class="legend-item"><view class="legend-swatch legend-free"></view><text>全员都有空</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-clash"></view><text>全员都没空</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-partial"></view><text>部分空闲（格内为空闲人数/总人数）</text></view>
+      </block>
+    </view>
+
+    <!-- 周次切换 -->
+    <view class="week-nav">
+      <view class="week-nav-btn {{weekIdx === 0 ? 'week-nav-disabled' : ''}}" bindtap="onPrevWeek">‹</view>
+      <text class="week-nav-label">第 {{currentWeek}} 周</text>
+      <view class="week-nav-btn {{weekIdx === gridWeeks.length - 1 ? 'week-nav-disabled' : ''}}" bindtap="onNextWeek">›</view>
+    </view>
+
+    <!-- 网格 -->
+    <view class="match-grid">
+      <view class="mg-row mg-head">
+        <view class="mg-slot-label"></view>
+        <view class="mg-day mg-day-head" wx:for="{{dayLabels}}" wx:for-item="d" wx:key="*this">{{d}}</view>
       </view>
-      <view class="slot-line" wx:for="{{group.slots}}" wx:for-item="slot" wx:key="index">
-        <text class="slot-day">{{slot.dayLabel}}</text>
-        <text class="slot-time">{{slot.text}}</text>
+
+      <block wx:for="{{gridRows}}" wx:for-item="row" wx:key="index">
+        <view wx:if="{{row.type === 'break'}}" class="mg-break"><text>{{row.label}}</text></view>
+        <view wx:else class="mg-row">
+          <view class="mg-slot-label">
+            <text class="mg-slot-no">{{row.slot}}</text>
+            <text class="mg-slot-time">{{row.start}}</text>
+          </view>
+          <view
+            class="mg-day mg-cell cell-{{cell.state}}"
+            wx:for="{{row.cells}}"
+            wx:for-item="cell"
+            wx:for-index="di"
+            wx:key="di"
+          >
+            <text wx:if="{{cell.label}}" class="mg-cell-label">{{cell.label}}</text>
+          </view>
+        </view>
+      </block>
+    </view>
+
+    <!-- 空闲时段明细 -->
+    <view wx:if="{{result.length}}" class="free-list">
+      <view class="free-list-title">空闲时段明细（全员都空的时段）</view>
+      <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
+        <view class="week-group-head">
+          <text class="week-badge">第 {{group.week}} 周</text>
+        </view>
+        <view class="slot-line" wx:for="{{group.slots}}" wx:for-item="slot" wx:key="index">
+          <text class="slot-day">{{slot.dayLabel}}</text>
+          <text class="slot-time">{{slot.text}}</text>
+        </view>
       </view>
     </view>
   </view>
 
   <!-- 未搜索且无结果时的引导 -->
   <view wx:if="{{!searched}}" class="empty-tip">
-    <text>输入同学邀请码，看看你们什么时候都有空</text>
+    <text>勾选同学或输入邀请码，看看大家什么时候都有空</text>
   </view>
 
 </view>
