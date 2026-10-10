@@ -33,7 +33,7 @@ const {
   isToday
 } = require(path.join(M, 'utils/week'));
 const { expandCourse, expandAll, toWeekGrid } = require(path.join(M, 'logic/course-expand'));
-const { alignFree, alignFreeWithRange, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
+const { alignFree, alignFreeWithRange, alignGrid, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
 const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRange } = require(path.join(M, 'logic/dnd-rule'));
 const { colorOf, softOf, buildColorMap, PALETTE } = require(path.join(M, 'utils/color'));
 const schedule = require(path.join(M, 'utils/schedule'));
@@ -1180,6 +1180,46 @@ const storeApi = require(path.join(M, 'api/store'));
     }
   });
   ok('完整模式：未传 layout:false', !normalArg || normalArg.layout !== false);
+
+  /* ============ 【43】找搭子可视化网格 alignGrid ============ */
+  group('【43】找搭子可视化网格 alignGrid');
+
+  // —— 双方同课 → 撞课；其它格 → 空闲 ——
+  const g1 = alignGrid(
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-2' }],
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-2' }]
+  );
+  eq('网格：双方同课 → 撞课', g1.grid[1][0][0], 'clash');
+  eq('网格：周二第 1 节都空 → 空闲', g1.grid[1][1][0], 'free');
+
+  // —— 四态区分 ——
+  const g2 = alignGrid(
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-1' }],
+    [{ day_of_week: 2, start_slot: 1, slot_count: 1, weeks: '1-1' }]
+  );
+  eq('网格：只有我忙 → mine', g2.grid[1][0][0], 'mine');
+  eq('网格：只有对方忙 → theirs', g2.grid[1][1][0], 'theirs');
+  eq('网格：双方都空 → free', g2.grid[1][2][0], 'free');
+
+  // —— 起床/就寝裁剪：范围外是 out，不参与高亮/标灰 ——
+  const g3 = alignGrid(
+    [{ day_of_week: 1, start_slot: 2, slot_count: 1, weeks: '1-1' }],
+    [],
+    { slotCount: 4, wakeSlot: 2, sleepSlot: 3 }
+  );
+  eq('网格：起床前 → out', g3.grid[1][0][0], 'out');
+  eq('网格：就寝后 → out', g3.grid[1][0][3], 'out');
+  eq('网格：范围内都空 → free', g3.grid[1][0][2], 'free');
+  eq('网格：slotCount 回传', g3.slotCount, 4);
+
+  // —— 单双周：单周课不能误占偶数周 ——
+  const g4 = alignGrid(
+    [{ day_of_week: 1, start_slot: 1, slot_count: 1, weeks: '1-3 单' }],
+    [{ day_of_week: 2, start_slot: 1, slot_count: 1, weeks: '1-3' }]
+  );
+  eq('网格：单周课在奇数周占用（周1周一=我忙）', g4.grid[1][0][0], 'mine');
+  eq('网格：单周课在偶数周不占用（周2周一=空闲）', g4.grid[2][0][0], 'free');
+  eq('网格：周次并集且升序', g4.weeks.join(','), '1,2,3');
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

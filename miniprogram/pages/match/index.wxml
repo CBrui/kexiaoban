@@ -38,16 +38,63 @@
     <view wx:if="{{tipType === 'error'}}" class="tip-action" bindtap="onRetry">重试</view>
   </view>
 
-  <!-- 结果区 -->
-  <view wx:if="{{result.length}}" class="card">
-    <view class="section-title">共同空闲（{{resultCount}} 个周次）</view>
-    <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
-      <view class="week-group-head">
-        <text class="week-badge">第 {{group.week}} 周</text>
+  <!-- 结果区：可视化网格 -->
+  <view wx:if="{{hasGrid}}" class="card">
+    <view class="section-title">空闲对齐图 · 共 {{freeSegments}} 段共同空闲</view>
+
+    <!-- 图例 -->
+    <view class="legend">
+      <view class="legend-item"><view class="legend-swatch legend-free"></view><text>都有空</text></view>
+      <view class="legend-item"><view class="legend-swatch legend-clash"></view><text>撞课</text></view>
+      <view class="legend-item"><view class="legend-swatch legend-mine"></view><text>我忙</text></view>
+      <view class="legend-item"><view class="legend-swatch legend-theirs"></view><text>对方忙</text></view>
+    </view>
+
+    <!-- 周次切换 -->
+    <view class="week-nav">
+      <view class="week-nav-btn {{weekIdx === 0 ? 'week-nav-disabled' : ''}}" bindtap="onPrevWeek">‹</view>
+      <text class="week-nav-label">第 {{currentWeek}} 周</text>
+      <view class="week-nav-btn {{weekIdx === gridWeeks.length - 1 ? 'week-nav-disabled' : ''}}" bindtap="onNextWeek">›</view>
+    </view>
+
+    <!-- 网格 -->
+    <view class="match-grid">
+      <view class="mg-row mg-head">
+        <view class="mg-slot-label"></view>
+        <view class="mg-day mg-day-head" wx:for="{{dayLabels}}" wx:for-item="d" wx:key="*this">{{d}}</view>
       </view>
-      <view class="slot-line" wx:for="{{group.slots}}" wx:for-item="slot" wx:key="index">
-        <text class="slot-day">{{slot.dayLabel}}</text>
-        <text class="slot-time">{{slot.text}}</text>
+
+      <block wx:for="{{gridRows}}" wx:for-item="row" wx:key="index">
+        <view wx:if="{{row.type === 'break'}}" class="mg-break"><text>{{row.label}}</text></view>
+        <view wx:else class="mg-row">
+          <view class="mg-slot-label">
+            <text class="mg-slot-no">{{row.slot}}</text>
+            <text class="mg-slot-time">{{row.start}}</text>
+          </view>
+          <view
+            class="mg-day mg-cell cell-{{cell.state}}"
+            wx:for="{{row.cells}}"
+            wx:for-item="cell"
+            wx:for-index="di"
+            wx:key="di"
+          >
+            <text wx:if="{{cell.label}}" class="mg-cell-label">{{cell.label}}</text>
+          </view>
+        </view>
+      </block>
+    </view>
+
+    <!-- 空闲时段明细 -->
+    <view wx:if="{{result.length}}" class="free-list">
+      <view class="free-list-title">空闲时段明细</view>
+      <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
+        <view class="week-group-head">
+          <text class="week-badge">第 {{group.week}} 周</text>
+        </view>
+        <view class="slot-line" wx:for="{{group.slots}}" wx:for-item="slot" wx:key="index">
+          <text class="slot-day">{{slot.dayLabel}}</text>
+          <text class="slot-time">{{slot.text}}</text>
+        </view>
       </view>
     </view>
   </view>

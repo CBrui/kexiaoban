@@ -1,36 +1,65 @@
 /**
  * pages/match/index.js —— 找搭子（空闲时间对齐）
  *
- * 页面结构：输入区 → 结果区 → 兜底提示
+ * 页面结构：输入区 → 结果区（可视化网格 + 空闲时段明细）→ 兜底提示
+ *
+ * 可视化网格四态：
+ *   free   双方都空 → 高亮
+ *   clash  双方都忙（撞课）→ 标灰
+ *   mine   只有我忙
+ *   theirs 只有对方忙
+ * 与课表页共用同一套节次轴（buildSlotAxis），因此节数、午休/晚休分隔带
+ * 都与用户自己课表一致。
+ *
  * 产品分水岭：若对方尚未建课表，提示「对方还没建课表」，
  *             而不是显示「全天有空」——后者技术上正确但会误导用户。
  */
-const { alignFreeWithRange, isCounterpartEmpty } = require('../../logic/free-align');
+const { alignFreeWithRange, alignGrid, isCounterpartEmpty } = require('../../logic/free-align');
 const { listCourses, listCoursesByOwner } = require('../../api/course');
 const { findByInviteCode, bindFriend, listFriends } = require('../../api/profile');
+const schedule = require('../../utils/schedule');
 
 const app = getApp();
 const DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+// 格子状态 → 显示文字（free/out 不显示文字，只靠底色区分）
+const CELL_LABEL = { clash: '撞', mine: '我', theirs: '他', free: '', out: '' };
 
 Page({
   data: {
     inviteCode: '',
     loading: false,
     friends: [],
-    result: [],          // [{week, slots:[{dayLabel, from, to}]}]
+    result: [],          // [{week, slots:[{dayLabel, from, to}]}]  空闲时段明细
     resultCount: 0,
     tip: '',             // 兜底提示
     tipType: '',         // empty | none | error
     searched: false,
     wakeSlot: 1,
-    sleepSlot: 12,
-    slotOptions: []
+    sleepSlot: 6,
+    slotOptions: [],
+    // 可视化网格
+    dayLabels: DAY_LABELS,
+    axis: [],            // 节次轴（含休息行），来自 schedule.buildSlotAxis()
+    hasGrid: false,
+    gridWeeks: [],       // 有课（或空闲）的周次列表
+    weekIdx: 0,
+    currentWeek: 0,
+    gridRows: [],        // 当前周的渲染行
+    freeSegments: 0      // 共同空闲时段总数（所有周次合计）
   },
 
   onLoad() {
-    const slots = [];
-    for (let i = 1; i <= 12; i++) slots.push(i);
-    this.setData({ slotOptions: slots });
+    // 用「用户实际作息」的节次轴，而不是写死 12 节——这样网格才和课表页一致
+    const axis = schedule.buildSlotAxis();
+    const totalSlots = schedule.getTotalSlots();
+    const slotOptions = [];
+    for (let i = 1; i <= totalSlots; i++) slotOptions.push(i);
+
+    this._axis = axis;
+    this._totalSlots = totalSlots;
+
+    this.setData({ axis, slotOptions, sleepSlot: totalSlots });
     app.whenReady(() => this.loadFriends());
   },
 
@@ -72,7 +101,10 @@ Page({
       return;
     }
 
-    this.setData({ loading: true, tip: '', tipType: '', result: [], searched: true });
+    this.setData({
+      loading: true, tip: '', tipType: '',
+      result: [], hasGrid: false, gridRows: [], searched: true
+    });
 
     try {
       // 1. 通过邀请码找到同学
@@ -114,8 +146,15 @@ Page({
         return;
       }
 
-      // 5. 计算共同空闲
+      // 5. 计算共同空闲（文字明细，保留原功能）
       const slots = alignFreeWithRange(myCourses, friendCourses, {
+        wakeSlot: this.data.wakeSlot,
+        sleepSlot: this.data.sleepSlot
+      });
+
+      // 5.1 计算可视化网格（撞课/空闲四态）
+      const gridRes = alignGrid(myCourses, friendCourses, {
+        slotCount: this._totalSlots,
         wakeSlot: this.data.wakeSlot,
         sleepSlot: this.data.sleepSlot
       });
@@ -128,7 +167,7 @@ Page({
         return;
       }
 
-      // 6. 格式化输出
+      // 6. 格式化输出：空闲时段明细
       const result = slots.map((item) => ({
         week: item.week,
         slots: item.slots.map((s) => ({
@@ -139,13 +178,69 @@ Page({
         }))
       }));
 
-      this.setData({ result, resultCount: result.length });
+      // 7. 渲染网格：默认显示第一个周次
+      this._gridRes = gridRes;
+      const freeSegments = slots.reduce((n, w) => n + w.slots.length, 0);
+      const weekIdx = 0;
+      const currentWeek = gridRes.weeks[weekIdx] || 0;
+
+      this.setData({
+        result,
+        resultCount: result.length,
+        freeSegments,
+        hasGrid: gridRes.weeks.length > 0,
+        gridWeeks: gridRes.weeks,
+        weekIdx,
+        currentWeek,
+        gridRows: currentWeek ? this.buildGridRows(gridRes, currentWeek) : []
+      });
     } catch (e) {
       console.error('[match] 对齐失败', e);
       this.setData({ tip: '查询失败，请检查网络后重试', tipType: 'error' });
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  /**
+   * 把某一周的网格数据，按节次轴展开成可渲染的行。
+   * 休息行整行铺开；普通节次行拆成 7 个 day 格子。
+   */
+  buildGridRows(gridRes, week) {
+    const g = gridRes.grid[week];
+    if (!g) return [];
+    return this._axis.map((a) => {
+      if (a.type === 'break') {
+        return { type: 'break', label: a.label };
+      }
+      const slotIdx = a.slot - 1;
+      const cells = [];
+      for (let d = 0; d < 7; d++) {
+        const state = (g[d] && g[d][slotIdx]) || 'out';
+        cells.push({ state, label: CELL_LABEL[state] || '' });
+      }
+      return { type: 'slot', slot: a.slot, start: a.start, end: a.end, cells };
+    });
+  },
+
+  onPrevWeek() {
+    if (this.data.weekIdx > 0) this.gotoWeek(this.data.weekIdx - 1);
+  },
+
+  onNextWeek() {
+    if (this.data.weekIdx < this.data.gridWeeks.length - 1) {
+      this.gotoWeek(this.data.weekIdx + 1);
+    }
+  },
+
+  gotoWeek(idx) {
+    const week = this.data.gridWeeks[idx];
+    if (!week || !this._gridRes) return;
+    this.setData({
+      weekIdx: idx,
+      currentWeek: week,
+      gridRows: this.buildGridRows(this._gridRes, week)
+    });
   },
 
   onRetry() {
