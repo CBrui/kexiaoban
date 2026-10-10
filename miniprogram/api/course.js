@@ -115,7 +115,40 @@ async function removeCourse(id) {
 }
 
 /**
- * 读取指定朋友的课程（用于找搭子）
+ * 读取指定朋友的课程 + 「对方有没有课表」（用于找搭子）。
+ *
+ * 为什么需要区分：客户端在对方无课程时会把人跳过（不能当成「全天有空」），
+ * 但「对方没建课表」和「对方建了课表、只是还没录课程」是两种不同情况，
+ * 提示语要分开说（前者该去建表，后者该去录课程），否则会出现
+ * 「明明建了课表，却被提示没建课表」的误解。
+ *
+ * @returns {Promise<{courses: object[], hasTimetable: boolean}>}
+ */
+async function fetchFriendCourses(ownerId) {
+  if (!ownerId) return { courses: [], hasTimetable: false };
+
+  if (getMode() === 'cloud') {
+    const res = await getClient().callFunction({
+      name: 'findBuddy',
+      data: { action: 'getCourses', friendOwnerId: String(ownerId) }
+    });
+    const r = (res && res.result) || null;
+    if (!r || !r.ok) {
+      throw new Error('读取对方课程失败：' + ((r && r.message) || (r && r.error) || '未知错误'));
+    }
+    return {
+      courses: withIds(r.courses || []),
+      hasTimetable: !!r.hasTimetable
+    };
+  }
+
+  const courses = await store.select(TABLE, { owner_id: ownerId });
+  const timetables = await store.select('timetables', { owner_id: ownerId });
+  return { courses, hasTimetable: timetables.length > 0 };
+}
+
+/**
+ * 读取指定朋友的课程（只要课程数组，找搭子以外的调用方用）。
  *
  * 注意 1：这里不按 timetable_id 过滤 —— 朋友的课表 id 与本地无关，
  *         找搭子关心的是「对方全部课程造成的占用」，跨课表合并才符合语义。
@@ -130,19 +163,7 @@ async function removeCourse(id) {
  *         （云模式下即对方的 _openid），云函数据此定位对方课程。
  */
 async function listCoursesByOwner(ownerId) {
-  if (!ownerId) return [];
-  if (getMode() === 'cloud') {
-    const res = await getClient().callFunction({
-      name: 'findBuddy',
-      data: { action: 'getCourses', friendOwnerId: String(ownerId) }
-    });
-    const r = (res && res.result) || null;
-    if (!r || !r.ok) {
-      throw new Error('读取对方课程失败：' + ((r && r.message) || (r && r.error) || '未知错误'));
-    }
-    return withIds(r.courses || []);
-  }
-  return store.select(TABLE, { owner_id: ownerId });
+  return (await fetchFriendCourses(ownerId)).courses;
 }
 
 /**
@@ -169,5 +190,6 @@ module.exports = {
   updateCourse,
   removeCourse,
   listCoursesByOwner,
+  fetchFriendCourses,
   countCourses
 };

@@ -545,9 +545,22 @@ const storeApi = require(path.join(M, 'api/store'));
             result: { ok: false, error: 'NO_RELATION', message: '尚未与该同学建立关系' }
           });
         }
+        // 没建课表：无课表、无课程
+        if (data.friendOwnerId === 'oNOTIMETABLE') {
+          return Promise.resolve({
+            result: { ok: true, courses: [], hasTimetable: false }
+          });
+        }
+        // 建了课表但还没录课程：有课表、课程为空
+        if (data.friendOwnerId === 'oEMPTYTABLE') {
+          return Promise.resolve({
+            result: { ok: true, courses: [], hasTimetable: true }
+          });
+        }
         return Promise.resolve({
           result: {
             ok: true,
+            hasTimetable: true,
             courses: [
               { _id: 'c1', name: '高等数学', day_of_week: 1, start_slot: 1, slot_count: 2, weeks: '1-16' }
             ]
@@ -581,6 +594,22 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('云函数收到对方身份', lastCall.data.friendOwnerId, 'oFRIEND');
   eq('课程记录补上 id（_id 归一化）', friendCourses[0].id, 'c1');
   eq('课程内容正确', friendCourses[0].name, '高等数学');
+
+  // fetchFriendCourses 额外回传 hasTimetable，供页面区分两类「没录课程」
+  const friendEntry = await courseApi.fetchFriendCourses('oFRIEND');
+  eq('fetchFriendCourses 回传课程数组', friendEntry.courses.length, 1);
+  eq('fetchFriendCourses 回传 hasTimetable=true', friendEntry.hasTimetable, true);
+
+  const noTable = await courseApi.fetchFriendCourses('oNOTIMETABLE');
+  eq('对方没建课表 → 课程为空', noTable.courses.length, 0);
+  eq('对方没建课表 → hasTimetable=false', noTable.hasTimetable, false);
+
+  const emptyTable = await courseApi.fetchFriendCourses('oEMPTYTABLE');
+  eq('对方建了课表但没录课程 → 课程为空', emptyTable.courses.length, 0);
+  eq('对方建了课表但没录课程 → hasTimetable=true', emptyTable.hasTimetable, true);
+
+  eq('listCoursesByOwner 仍只返回数组（旧调用方兼容）',
+    Array.isArray(await courseApi.listCoursesByOwner('oFRIEND')), true);
 
   let relationErr = '';
   try {
@@ -1272,6 +1301,28 @@ const storeApi = require(path.join(M, 'api/store'));
   );
   eq('多人网格：空课表同学不占用 → partial', gme.grid[1][0][0].state, 'partial');
   eq('多人网格：空课表同学计入空闲数', gme.grid[1][0][0].freeCount, 1);
+
+  /* ============ 38. 找搭子好友课表存在性（本地模式） ============ */
+  // 本地模式没有云端课表统计接口，改为在本地 store 里按 owner_id 查 timetables。
+  // 覆盖「有课表无课程」这一关键区分 —— 页面据此说「建了课表但还没录课程」
+  // 而不是笼统的「没建课表」。
+  group('【38】找搭子好友课表存在性 fetchFriendCourses（本地模式）');
+
+  clientApi.initClient({ useCloud: false });
+  eq('客户端已切回本地模式', clientApi.getMode(), 'local');
+
+  // 造一位「已建课表、但还没录课程」的同学
+  await storeApi.insert('timetables', { owner_id: 'oLOCAL_T', name: '某同学课表' });
+  const localEmpty = await courseApi.fetchFriendCourses('oLOCAL_T');
+  eq('本地：对方有课表 → hasTimetable=true', localEmpty.hasTimetable, true);
+  eq('本地：对方无课程 → 课程为空', localEmpty.courses.length, 0);
+
+  const localNone = await courseApi.fetchFriendCourses('oLOCAL_NONE');
+  eq('本地：查无此人数据 → hasTimetable=false', localNone.hasTimetable, false);
+  eq('本地：查无此人数据 → 课程为空', localNone.courses.length, 0);
+
+  eq('本地：owner_id 为空 → 不查库直接返回空',
+    await courseApi.fetchFriendCourses(''), { courses: [], hasTimetable: false });
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

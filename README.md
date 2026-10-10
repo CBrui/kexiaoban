@@ -68,7 +68,8 @@ kexiaoban/
 3. **配置云环境**：在 `miniprogram/config.js` 中填入 `CLOUD_ENV_ID`，并把 `USE_CLOUD` 改为 `true`
    - 未配置云环境时，项目自动降级为本地存储模式（`wx.storage`），可完整开发调试
 4. **建数据表**：云数据库中创建 `timetables`、`courses`、`profiles`、`relations` 四个集合，权限设为「仅创建者可读写」
-5. **部署云函数**：上传并部署 `cloudfunctions/findBuddy` 与 `cloudfunctions/recognizeTimetable`（云端安装依赖）
+5. **部署云函数**：上传并部署 `cloudfunctions/auth`、`cloudfunctions/findBuddy` 与 `cloudfunctions/recognizeTimetable`（云端安装依赖）
+   - 微信登录靠 `auth` —— 服务端以 `getWXContext().OPENID` 为身份锚点找/建档案。⚠️ **必须部署**：服务端建档时若不显式写入身份（见下），新用户的 `owner_id` 会退化成档案文档 id，导致「找搭子」误报「对方还没建课表」
    - 找搭子靠 `findBuddy` 跨用户读取 —— 集合权限是「仅创建者可读写」，客户端直查读不到别人的档案与课程
    - 拍照识别靠 `recognizeTimetable` —— 多模态模型只能在服务端调（小程序端 SDK 只支持文本生成），且模型密钥不能落到客户端
    - **超时按 60 秒设**：`callFunction` 有 60 秒硬上限（控制台把云函数调到 300/900 秒也突破不了），超时设 `updateFunctionConfig(timeout=60)` 即可；注意 `updateFunctionCode` **不会**改超时，必须另调
@@ -98,7 +99,7 @@ origin  https://git.weixin.qq.com/Yu1__/kexiaoban.git   主分支：master
 2. **提交信息必须写清「修改了什么、添加了什么功能」** —— 推荐 `类型(模块): 标题` + 正文分「新增内容 / 修改内容 / 影响范围」
 3. **`project.private.config.json` 不提交** —— 这是每台机器独有的开发者工具本地配置，已在 `.gitignore` 中忽略
 
-同事首次接入：把微信代码托管账号给负责人加为开发者 → `git clone` 仓库 → 微信开发者工具导入 → `node test/run.js` 验证（332 项全通过）。完整步骤见 [docs/COLLABORATION.md](docs/COLLABORATION.md)。
+同事首次接入：把微信代码托管账号给负责人加为开发者 → `git clone` 仓库 → 微信开发者工具导入 → `node test/run.js` 验证（371 项全通过）。完整步骤见 [docs/COLLABORATION.md](docs/COLLABORATION.md)。
 
 ## 核心算法
 
@@ -288,8 +289,18 @@ return withIds(res.data);   // 给每条文档补上 id = _id
 | 层 | 做法 |
 |----|------|
 | 会话 | `app.js` 启动时静默 `wx.login()` 刷新会话（失败不阻断，云函数自身会校验） |
-| 身份 | 云函数 `auth`（action=`login`）：服务端按 `_openid` 找档案，没有则**服务端建档** —— 邀请码在服务端查重后再写入，杜绝撞码；档案一次性带全 `owner_id`，不再需要客户端回读回填 |
+| 身份 | 云函数 `auth`（action=`login`）：服务端按 `_openid` **或** `owner_id` 找档案，没有则**服务端建档** —— 邀请码在服务端查重后再写入，杜绝撞码；建档时**显式写入 `_openid` 与 `owner_id`**（均为 `OPENID`），档案一次性带全身份，不再需要客户端回读回填 |
 | 兜底 | `auth` 云函数不可用（未部署/网络失败）时，自动回退旧客户端链路（建档案 + 回读回填 `owner_id`），登录永不因单点失败而完全不可用 |
+
+> ⚠️ **最关键的一处平台坑：云函数写入的文档不会自动带 `_openid`**。官方文档明确「在服务端（例如云函数）或者管理端（例如控制台）中创建的记录，**不会自动生成 `_openid` 字段**」—— 该字段只在**客户端直连数据库写入**时才自动附带。
+>
+> 因此服务端建档**必须主动把 `OPENID` 写进记录**，否则连锁引发三个问题：
+>
+> 1. **权限错位** —— 档案没有 `_openid`，PRIVATE 权限判定「无创建者」，用户连自己的档案都读不到、改不了（`pages/profile` 的 `updateProfile` 报错）
+> 2. **身份退化** —— `owner_id` 回退成文档 `_id`，与课程真实的 `_openid` 对不上
+> 3. **找搭子失效** —— `findBuddy.getCourses` 按 `_openid` 查对方课程永远查空，于是**明明录了课程，却提示「对方还没建课表」**
+>
+> 这也是「新用户找搭子异常」的根因。回归用例见 `test/run.js` 的【35】（`fetchFriendCourses` 的 `hasTimetable` 回传）。
 
 用户资料（头像/昵称）使用微信官方组件：`<button open-type="chooseAvatar">` 选头像（云模式上传云存储后落库）、`<input type="nickname">` 快捷填微信昵称。
 
@@ -298,7 +309,8 @@ return withIds(res.data);   // 给每条文档补上 id = _id
 找搭子从「1 对 1」扩展为「**我 + N 位同学**」共同比对：
 
 - 已绑定同学以芯片多选（昵称由 `findBuddy.listFriends` 服务端补齐，老关系无昵称时回退「同学+尾号」）；也可凭邀请码临时加一位
-- 「空闲」按**全员都空**计算（`alignFreeMulti` / `alignGridMulti`）；被选同学若没建课表会被跳过并明确提示，不会误当成「全天有空」
+- 「空闲」按**全员都空**计算（`alignFreeMulti` / `alignGridMulti`）；被选同学若一门课都没有会被跳过并明确提示，不会误当成「全天有空」
+- **「没建课表」与「建了课表但还没录课程」是两回事**，提示语分开说：`findBuddy.getCourses` 顺带回传 `hasTimetable`，客户端据此提示「XXX 还没建课表」或「XXX 建了课表但还没录入课程」，避免「明明建了课表却被说没建」的误解（判定依据是**课程数**，见 `isCounterpartEmpty`）
 - 2 人时网格保留「我忙 / 对方忙」的区分；≥3 人合并为「部分空闲」，格内显示 `空闲人数/总人数`
 
 ## 自定义节次
@@ -337,7 +349,7 @@ SCHEDULE: {
 
 ## 测试覆盖
 
-`node test/run.js` 覆盖 279 项断言，重点覆盖文档标注的高风险点：
+`node test/run.js` 覆盖 371 项断言，重点覆盖文档标注的高风险点：
 
 - 周次解析五种写法（含单/双/多段区间）
 - 单双周课程展开（偶数周不得含单周课的点）
@@ -353,6 +365,7 @@ SCHEDULE: {
 - **多课表**：总周次与日期校验夹紧、首次创建与幂等、历史课程迁移、`is_current` 全局唯一、按课表隔离课程、修改配置、结束日期换算、级联删课程与指针转移
 - **云 / 本地主键差异**：云文档 `_id` → `id` 归一化（含「已有 id 不被覆盖」「纯函数不修改原对象」边界）
 - **云模式找搭子走云函数**：`findByInviteCode` / `listCoursesByOwner` 在云模式下调用 `findBuddy`（参数、动作、邀请码归一化、课程 `_id` 归一化、无绑定关系时报错不静默）
+- **好友课表存在性 `fetchFriendCourses`**：云 / 本地双模式回传 `{ courses, hasTimetable }` —— 覆盖「有课表无课程」与「无课表无课程」两种关键区分（页面据此给出不同提示）、`listCoursesByOwner` 仍只返回数组（旧调用方兼容）
 - **课程编辑**：`updateCourse` 云 / 本地双路径（云走 `doc(id).update`、本地按 id 匹配落库）、编辑后各字段回读一致、编辑不新增课程、不存在的 id 返回 null 不抛错
 - **AI 解析管线**：输入预处理（全角标点 / 零宽字符归一）、JSON 抽取容错（剥代码块 / 带前言）、Schema 校验（字段缺失标记而非猜测、越界值判缺失、连续节数越界裁剪、中文数字与带单位值容错、无用记录丢弃）、流式拼装与进度回调、四类错误码与降级路径（`AI_UNAVAILABLE` 回退本地规则）
 - **图片识别管线**：压缩 → 上传 → 云函数 → 归一化全链路、剥 ```json 代码块、缺字段标记而非丢弃、`NO_FILE` / `UPLOAD_FAILED` / `IMAGE_TOO_LARGE` / 服务端 `MODEL_ERROR` / 云函数异常 / 非 JSON 输出 / 空结果 / 无云能力降级，共 8 类错误路径

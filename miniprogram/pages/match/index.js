@@ -15,14 +15,15 @@
  *   partial（≥3 人）部分人忙
  * 节次轴与课表页共用（buildSlotAxis），节数、午休/晚休分隔带保持一致。
  *
- * 产品分水岭：被选同学若还没建课表，跳过并在结果里说明，而不是当成「全天有空」。
+ * 产品分水岭：被选同学若一门课都没有，跳过并在结果里说明，而不是当成「全天有空」。
+ * 但「没录课程」要再分两种：没建课表 / 建了课表但没录课程 —— 提示语不同（见 onAlign）。
  */
 const {
   alignFreeWithRange, alignGrid,
   alignFreeMulti, alignGridMulti,
   isCounterpartEmpty
 } = require('../../logic/free-align');
-const { listCourses, listCoursesByOwner } = require('../../api/course');
+const { listCourses, fetchFriendCourses } = require('../../api/course');
 const {
   findByInviteCode, bindFriend, listFriendProfiles
 } = require('../../api/profile');
@@ -199,30 +200,41 @@ Page({
 
       // 2. 取双方/多方课程（我 + 每位参与者）
       const myCourses = await listCourses();
-      const friendCourses = await Promise.all(
-        participants.map((p) => listCoursesByOwner(p.owner_id).catch(() => []))
+      const friendEntries = await Promise.all(
+        participants.map((p) =>
+          fetchFriendCourses(p.owner_id).catch(() => ({ courses: [], hasTimetable: false }))
+        )
       );
 
-      // 3. 没建课表的同学跳过（不能当成「全天有空」，会误导）
+      // 3. 没录课程的同学跳过（不能当成「全天有空」，会误导）。
+      //    但要区分「没建课表」与「建了课表、只是还没录课程」——两者提示语不同。
       const valid = [];
-      const skipped = [];
+      const skipped = [];   // [{ nickname, hasTimetable }]
       participants.forEach((p, i) => {
-        const courses = friendCourses[i];
-        if (isCounterpartEmpty(courses)) skipped.push(p.nickname);
-        else valid.push({ ...p, courses });
+        const entry = friendEntries[i];
+        if (isCounterpartEmpty(entry.courses)) {
+          skipped.push({ nickname: p.nickname, hasTimetable: !!entry.hasTimetable });
+        } else {
+          valid.push({ ...p, courses: entry.courses });
+        }
       });
+
+      // 把已跳过的同学按原因分组，拼出准确的提示语
+      const noTableNames = skipped.filter((s) => !s.hasTimetable).map((s) => s.nickname);
+      const noCourseNames = skipped.filter((s) => s.hasTimetable).map((s) => s.nickname);
+      const skipParts = [];
+      if (noTableNames.length) skipParts.push(`${noTableNames.join('、')}还没建课表`);
+      if (noCourseNames.length) skipParts.push(`${noCourseNames.join('、')}建了课表但还没录入课程`);
 
       if (!valid.length) {
         this.setData({
-          tip: '所选同学都还没建课表，暂时无法比对空闲时间',
+          tip: `${skipParts.join('；')}，暂时无法比对空闲时间`,
           tipType: 'empty'
         });
         return;
       }
 
-      const skippedNote = skipped.length
-        ? `${skipped.join('、')}还没建课表，本次未参与比对`
-        : '';
+      const skippedNote = skipParts.length ? `${skipParts.join('；')}，本次未参与比对` : '';
       const courseLists = [myCourses].concat(valid.map((v) => v.courses));
       const range = {
         wakeSlot: this.data.wakeSlot,

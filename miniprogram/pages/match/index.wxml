@@ -54,7 +54,7 @@
   <!-- 兜底提示 -->
   <view wx:if="{{tip}}" class="tip-box tip-{{tipType}}">
     <text class="tip-text">{{tip}}</text>
-    <view wx:if="{{tipType === 'empty'}}" class="tip-action" bindtap="onGoBuild">去建我的课表</view>
+    <view wx:if="{{tipType === 'empty'}}" class="tip-action" bindtap="onGoBuild">去建课表</view>
     <view wx:if="{{tipType === 'error'}}" class="tip-action" bindtap="onRetry">重试</view>
   </view>
 

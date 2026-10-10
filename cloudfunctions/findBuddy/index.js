@@ -19,7 +19,7 @@
  *
  * 动作（event.action）：
  *   - `findProfile`：{ inviteCode } → { ok, profile|null }
- *   - `getCourses` ：{ friendOwnerId } → { ok, courses }
+ *   - `getCourses` ：{ friendOwnerId } → { ok, courses, hasTimetable }
  *   - `listFriends`：→ { ok, friends:[{owner_id, nickname, avatar_url, ...}] }
  */
 const cloud = require('wx-server-sdk');
@@ -30,6 +30,7 @@ const db = cloud.database();
 const PROFILES = 'profiles';
 const COURSES = 'courses';
 const RELATIONS = 'relations';
+const TIMETABLES = 'timetables';
 
 const ok = (data) => Object.assign({ ok: true }, data);
 const fail = (error, message) => ({ ok: false, error, message: message || '' });
@@ -71,6 +72,11 @@ async function findProfile(inviteCode) {
 /**
  * 取对方全部课程（跨课表合并 —— 找搭子关心的是「对方所有课程造成的占用」，
  * 因此**不**按 timetable_id 过滤，与客户端原有语义一致）。
+ *
+ * 同时回报 `hasTimetable`：客户端「找搭子」在对方无课程时要把人跳过，
+ * 但**「没建课表」和「建了课表、只是还没录课程」是两回事**，
+ * 提示语需要区分（前者该去建表，后者该去录课程），因此这里顺手统计一下
+ * 对方的课表数，把判断依据一并回传，避免客户端只能笼统地报「没建课表」。
  */
 async function getCourses(friendOwnerId, myOwnerId) {
   const fid = String(friendOwnerId || '').trim();
@@ -87,7 +93,18 @@ async function getCourses(friendOwnerId, myOwnerId) {
   }
 
   const res = await db.collection(COURSES).where({ _openid: fid }).get();
-  return ok({ courses: res.data || [] });
+
+  // 对方是否至少有一张课表（用于区分「没建课表」与「课表没录课程」）。
+  // 统计失败不影响课程返回，降级为「未知」（按 false 处理即可）。
+  let hasTimetable = false;
+  try {
+    const tRes = await db.collection(TIMETABLES).where({ _openid: fid }).count();
+    hasTimetable = (tRes.total || 0) > 0;
+  } catch (e) {
+    console.warn('[findBuddy] 统计对方课表数失败（不影响课程返回）', e);
+  }
+
+  return ok({ courses: res.data || [], hasTimetable });
 }
 
 /**
