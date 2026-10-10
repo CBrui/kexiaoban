@@ -316,6 +316,8 @@ return withIds(res.data);   // 给每条文档补上 id = _id
 同时，关系查询一律以平台写入的 `_openid` 为主判据（`listFriends` / `getCourses`），不再只依赖会变的 `owner_id`。
 
 > ⚠️ 这只修复**显示名**。若对方身份确实已变，读其课程仍会失败（新身份与旧绑定对不上）——**需要对方重新分享新的邀请码、重新添加一次**。同理，此修复前建立的旧绑定在调试时若不显示名字，重新绑定即可恢复。
+>
+> 比对时不会再含糊其辞：这种情况会被识别为**绑定已失效**并在结果里明确提示（`findBuddy.getCourses` 回传 `staleBinding`，判断依据是 profiles 里已找不到 `_openid == 该绑定身份` 的档案），而不是报成「对方还没建课表」。
 
 用户资料（头像/昵称）使用微信官方组件：`<button open-type="chooseAvatar">` 选头像（云模式上传云存储后落库）、`<input type="nickname">` 快捷填微信昵称。
 
@@ -325,7 +327,16 @@ return withIds(res.data);   // 给每条文档补上 id = _id
 
 - 已绑定同学以芯片多选（昵称由 `findBuddy.listFriends` 服务端补齐；解析不到对方档案时会回退绑定当时存的 `friend_nickname`，仍无则显示「同学+身份尾号」）；也可凭邀请码临时加一位
 - 「空闲」按**全员都空**计算（`alignFreeMulti` / `alignGridMulti`）；被选同学若一门课都没有会被跳过并明确提示，不会误当成「全天有空」
-- **「没建课表」与「建了课表但还没录课程」是两回事**，提示语分开说：`findBuddy.getCourses` 顺带回传 `hasTimetable`，客户端据此提示「XXX 还没建课表」或「XXX 建了课表但还没录入课程」，避免「明明建了课表却被说没建」的误解（判定依据是**课程数**，见 `isCounterpartEmpty`）
+- **「自己没课」直接拦下**：自己一门课都没有时，「共同空闲」必然是假象（自己这边全空），会给出「你还没录入课程，先添加课程再和同学比对空闲时间」而不是一份看起来正常的结果
+- **「没录课程」按原因分三种，提示语各不相同**（判定依据是**课程数**，见 `isCounterpartEmpty`）：
+
+| 情况 | 判据 | 提示 |
+|---|---|---|
+| 绑定已失效 | `getCourses` 回传 `staleBinding` | 「XXX 的绑定已失效，请让对方重新分享邀请码后重新添加」 |
+| 还没建课表 | `hasTimetable === false` | 「XXX 还没建课表」 |
+| 建了课表没录课程 | `hasTimetable === true` | 「XXX 建了课表但还没录入课程」 |
+
+  前两种靠 `findBuddy.getCourses` 的 `hasTimetable` / `staleBinding` 区分（「绑定已失效」= profiles 里已找不到 `_openid == 该身份` 的档案），避免把「绑定过期」误报成「对方没建课表」。
 - 2 人时网格保留「我忙 / 对方忙」的区分；≥3 人合并为「部分空闲」，格内显示 `空闲人数/总人数`
 
 ## 自定义节次

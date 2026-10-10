@@ -19,7 +19,7 @@
  *
  * 动作（event.action）：
  *   - `findProfile`：{ inviteCode } → { ok, profile|null }
- *   - `getCourses` ：{ friendOwnerId } → { ok, courses, hasTimetable }
+ *   - `getCourses` ：{ friendOwnerId } → { ok, courses, hasTimetable, staleBinding }
  *   - `listFriends`：→ { ok, friends:[{owner_id, nickname, avatar_url, ...}] }
  */
 const cloud = require('wx-server-sdk');
@@ -99,6 +99,7 @@ async function getCourses(friendOwnerId, myOwnerId) {
   }
 
   const res = await db.collection(COURSES).where({ _openid: fid }).get();
+  const courses = res.data || [];
 
   // 对方是否至少有一张课表（用于区分「没建课表」与「课表没录课程」）。
   // 统计失败不影响课程返回，降级为「未知」（按 false 处理即可）。
@@ -110,7 +111,25 @@ async function getCourses(friendOwnerId, myOwnerId) {
     console.warn('[findBuddy] 统计对方课表数失败（不影响课程返回）', e);
   }
 
-  return ok({ courses: res.data || [], hasTimetable });
+  // 这条绑定是否已失效？
+  //   courses / timetables 都按对方的 `_openid` 存，而 fid 理应就是对方的 `_openid`。
+  //   若 profiles 里找不到 `_openid == fid` 的档案，说明对方身份已经变了
+  //   （历史坑：服务端建档没写 `_openid` → 每次登录新建档案 → owner_id 变），
+  //   此时「读不到」是必然的 —— 应明确提示「绑定已失效、请重新添加」，
+  //   而不是含糊地报「还没建课表」，让人以为是对方的问题。
+  //   仅在读不到课程时校验，省掉一次无谓查询。
+  let staleBinding = false;
+  if (!courses.length) {
+    try {
+      const pRes = await db.collection(PROFILES).where({ _openid: fid }).count();
+      staleBinding = !((pRes.total || 0) > 0);
+    } catch (e) {
+      console.warn('[findBuddy] 校验绑定有效性失败（按未失效处理）', e);
+      staleBinding = false;
+    }
+  }
+
+  return ok({ courses, hasTimetable, staleBinding });
 }
 
 /**

@@ -115,17 +115,17 @@ async function removeCourse(id) {
 }
 
 /**
- * 读取指定朋友的课程 + 「对方有没有课表」（用于找搭子）。
+ * 读取指定朋友的课程 + 「对方有没有课表」「绑定是否已失效」（用于找搭子）。
  *
  * 为什么需要区分：客户端在对方无课程时会把人跳过（不能当成「全天有空」），
- * 但「对方没建课表」和「对方建了课表、只是还没录课程」是两种不同情况，
- * 提示语要分开说（前者该去建表，后者该去录课程），否则会出现
- * 「明明建了课表，却被提示没建课表」的误解。
+ * 但「对方没建课表」「对方建了课表、只是还没录课程」「这条绑定已失效」是三种
+ * 不同情况，提示语要分开说，否则会出现「明明建了课表，却被提示没建课表」，
+ * 或者「其实是绑定过期了，却让人以为是对方没建课表」的误解。
  *
- * @returns {Promise<{courses: object[], hasTimetable: boolean}>}
+ * @returns {Promise<{courses: object[], hasTimetable: boolean, staleBinding: boolean}>}
  */
 async function fetchFriendCourses(ownerId) {
-  if (!ownerId) return { courses: [], hasTimetable: false };
+  if (!ownerId) return { courses: [], hasTimetable: false, staleBinding: false };
 
   if (getMode() === 'cloud') {
     const res = await getClient().callFunction({
@@ -138,13 +138,15 @@ async function fetchFriendCourses(ownerId) {
     }
     return {
       courses: withIds(r.courses || []),
-      hasTimetable: !!r.hasTimetable
+      hasTimetable: !!r.hasTimetable,
+      // 对方身份已变、旧绑定读不到其课程（见 findBuddy.getCourses）
+      staleBinding: !!r.staleBinding
     };
   }
 
   const courses = await store.select(TABLE, { owner_id: ownerId });
   const timetables = await store.select('timetables', { owner_id: ownerId });
-  return { courses, hasTimetable: timetables.length > 0 };
+  return { courses, hasTimetable: timetables.length > 0, staleBinding: false };
 }
 
 /**

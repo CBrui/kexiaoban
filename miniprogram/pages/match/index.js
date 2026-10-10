@@ -16,7 +16,9 @@
  * 节次轴与课表页共用（buildSlotAxis），节数、午休/晚休分隔带保持一致。
  *
  * 产品分水岭：被选同学若一门课都没有，跳过并在结果里说明，而不是当成「全天有空」。
- * 但「没录课程」要再分两种：没建课表 / 建了课表但没录课程 —— 提示语不同（见 onAlign）。
+ * 「没录课程」再分三种，提示语各不相同（见 onAlign）：
+ *   绑定已失效（对方身份变了）/ 还没建课表 / 建了课表但还没录入课程。
+ * 另外：自己一门课都没有时直接拦下 —— 否则「共同空闲」全是假象。
  */
 const {
   alignFreeWithRange, alignGrid,
@@ -198,31 +200,56 @@ Page({
         return;
       }
 
-      // 2. 取双方/多方课程（我 + 每位参与者）
+      // 2. 取双方/多方课程（我 + 每位参与者）。
+      //    先看自己：自己一门课都没有时，「共同空闲」必然是假象（自己这边全空），
+      //    结果会把人误导 —— 明确拦下并引导去录课程，而不是给一份看起来正常的结果。
       const myCourses = await listCourses();
+      if (isCounterpartEmpty(myCourses)) {
+        this.setData({
+          tip: '你还没录入课程，先添加课程再和同学比对空闲时间',
+          tipType: 'empty'
+        });
+        return;
+      }
+
       const friendEntries = await Promise.all(
         participants.map((p) =>
-          fetchFriendCourses(p.owner_id).catch(() => ({ courses: [], hasTimetable: false }))
+          fetchFriendCourses(p.owner_id).catch(() => ({
+            courses: [], hasTimetable: false, staleBinding: false
+          }))
         )
       );
 
-      // 3. 没录课程的同学跳过（不能当成「全天有空」，会误导）。
-      //    但要区分「没建课表」与「建了课表、只是还没录课程」——两者提示语不同。
+      // 3. 没有可用于比对课程的同学跳过（不能当成「全天有空」，会误导）。
+      //    按原因分三类，提示语各不相同：
+      //      · 绑定已失效 —— 对方身份变了，旧绑定读不到其课程，需重新添加
+      //      · 还没建课表
+      //      · 建了课表、只是还没录入课程
       const valid = [];
-      const skipped = [];   // [{ nickname, hasTimetable }]
+      const skipped = [];   // [{ nickname, hasTimetable, staleBinding }]
       participants.forEach((p, i) => {
         const entry = friendEntries[i];
         if (isCounterpartEmpty(entry.courses)) {
-          skipped.push({ nickname: p.nickname, hasTimetable: !!entry.hasTimetable });
+          skipped.push({
+            nickname: p.nickname,
+            hasTimetable: !!entry.hasTimetable,
+            staleBinding: !!entry.staleBinding
+          });
         } else {
           valid.push({ ...p, courses: entry.courses });
         }
       });
 
       // 把已跳过的同学按原因分组，拼出准确的提示语
-      const noTableNames = skipped.filter((s) => !s.hasTimetable).map((s) => s.nickname);
-      const noCourseNames = skipped.filter((s) => s.hasTimetable).map((s) => s.nickname);
+      const staleNames = skipped.filter((s) => s.staleBinding).map((s) => s.nickname);
+      const noTableNames = skipped
+        .filter((s) => !s.staleBinding && !s.hasTimetable).map((s) => s.nickname);
+      const noCourseNames = skipped
+        .filter((s) => !s.staleBinding && s.hasTimetable).map((s) => s.nickname);
       const skipParts = [];
+      if (staleNames.length) {
+        skipParts.push(`${staleNames.join('、')}的绑定已失效，请让对方重新分享邀请码后重新添加`);
+      }
       if (noTableNames.length) skipParts.push(`${noTableNames.join('、')}还没建课表`);
       if (noCourseNames.length) skipParts.push(`${noCourseNames.join('、')}建了课表但还没录入课程`);
 

@@ -548,19 +548,26 @@ const storeApi = require(path.join(M, 'api/store'));
         // 没建课表：无课表、无课程
         if (data.friendOwnerId === 'oNOTIMETABLE') {
           return Promise.resolve({
-            result: { ok: true, courses: [], hasTimetable: false }
+            result: { ok: true, courses: [], hasTimetable: false, staleBinding: false }
           });
         }
         // 建了课表但还没录课程：有课表、课程为空
         if (data.friendOwnerId === 'oEMPTYTABLE') {
           return Promise.resolve({
-            result: { ok: true, courses: [], hasTimetable: true }
+            result: { ok: true, courses: [], hasTimetable: true, staleBinding: false }
+          });
+        }
+        // 绑定已失效：对方身份已变，旧绑定读不到其课程
+        if (data.friendOwnerId === 'oSTALE') {
+          return Promise.resolve({
+            result: { ok: true, courses: [], hasTimetable: false, staleBinding: true }
           });
         }
         return Promise.resolve({
           result: {
             ok: true,
             hasTimetable: true,
+            staleBinding: false,
             courses: [
               { _id: 'c1', name: '高等数学', day_of_week: 1, start_slot: 1, slot_count: 2, weeks: '1-16' }
             ]
@@ -595,18 +602,26 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('课程记录补上 id（_id 归一化）', friendCourses[0].id, 'c1');
   eq('课程内容正确', friendCourses[0].name, '高等数学');
 
-  // fetchFriendCourses 额外回传 hasTimetable，供页面区分两类「没录课程」
+  // fetchFriendCourses 额外回传 hasTimetable + staleBinding，
+  // 供页面区分「没建课表 / 建了课表没录课程 / 绑定已失效」三种情况
   const friendEntry = await courseApi.fetchFriendCourses('oFRIEND');
   eq('fetchFriendCourses 回传课程数组', friendEntry.courses.length, 1);
   eq('fetchFriendCourses 回传 hasTimetable=true', friendEntry.hasTimetable, true);
+  eq('正常绑定 → 不报失效', friendEntry.staleBinding, false);
 
   const noTable = await courseApi.fetchFriendCourses('oNOTIMETABLE');
   eq('对方没建课表 → 课程为空', noTable.courses.length, 0);
   eq('对方没建课表 → hasTimetable=false', noTable.hasTimetable, false);
+  eq('对方没建课表 ≠ 绑定失效', noTable.staleBinding, false);
 
   const emptyTable = await courseApi.fetchFriendCourses('oEMPTYTABLE');
   eq('对方建了课表但没录课程 → 课程为空', emptyTable.courses.length, 0);
   eq('对方建了课表但没录课程 → hasTimetable=true', emptyTable.hasTimetable, true);
+  eq('对方建了课表但没录课程 ≠ 绑定失效', emptyTable.staleBinding, false);
+
+  const stale = await courseApi.fetchFriendCourses('oSTALE');
+  eq('绑定失效 → 课程为空', stale.courses.length, 0);
+  eq('绑定失效 → staleBinding=true', stale.staleBinding, true);
 
   eq('listCoursesByOwner 仍只返回数组（旧调用方兼容）',
     Array.isArray(await courseApi.listCoursesByOwner('oFRIEND')), true);
@@ -1320,9 +1335,11 @@ const storeApi = require(path.join(M, 'api/store'));
   const localNone = await courseApi.fetchFriendCourses('oLOCAL_NONE');
   eq('本地：查无此人数据 → hasTimetable=false', localNone.hasTimetable, false);
   eq('本地：查无此人数据 → 课程为空', localNone.courses.length, 0);
+  eq('本地：不会报「绑定失效」（本地无身份漂移）', localNone.staleBinding, false);
 
   eq('本地：owner_id 为空 → 不查库直接返回空',
-    await courseApi.fetchFriendCourses(''), { courses: [], hasTimetable: false });
+    await courseApi.fetchFriendCourses(''),
+    { courses: [], hasTimetable: false, staleBinding: false });
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
