@@ -44,7 +44,7 @@
     }
   },
   "compileType": "miniprogram",
-  "libVersion": "3.5.5",
+  "libVersion": "3.15.1",
   "condition": {},
   "editorSetting": {
     "tabIndent": "insertSpaces",

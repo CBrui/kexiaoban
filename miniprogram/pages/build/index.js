@@ -1,13 +1,14 @@
 /**
  * pages/build/index.js —— 建表页（对话建表 / 手工录入 两个入口）
  *
- * 说明：AI 对话建表与图片识别建表共用同一条解析管线，
+ * 说明：AI 对话建表与图片识别建表共用同一条解析管线（api/ai.js），
  *       在「结构化课程 JSON」这一步汇合，之后共用同一套预览确认界面。
- *       当前版本先实现手工录入 + 对话解析骨架（本地规则解析），
- *       接入云服务大模型后替换 parseByAI 的实现即可。
+ *       微信版本过低（基础库 < 3.15.1）不具备 wx.cloud.extend.AI 时，
+ *       自动回退到本页的本地规则解析 localParse()，保证功能不中断。
  */
 const { addCourse } = require('../../api/course');
 const timetableApi = require('../../api/timetable');
+const aiApi = require('../../api/ai');
 const { parseWeeks } = require('../../utils/week');
 const { getTotalSlots } = require('../../utils/schedule');
 
@@ -34,7 +35,23 @@ Page({
     dialogText: '',
     parsing: false,
     parsed: [],              // 待确认列表
-    parseError: ''
+    parseError: '',
+    streamHint: '',          // 流式解析进度提示（打字机效果）
+    usedAI: false,           // 本次结果来自 AI 还是本地规则（用于展示来源标识）
+
+    // 拍照导入
+    imagePath: '',           // 已选图片的本地临时路径（用于预览）
+    recognizing: false,      // 图片识别中
+    imageHint: '',           // 识别进度提示
+    imageError: '',          // 识别错误提示
+
+    // missing_fields 里的字段名 → 中文标签（WXML 里直接索引取用）
+    missingLabel: {
+      name: '课程名',
+      day_of_week: '星期',
+      start_slot: '开始节次',
+      weeks: '周次'
+    }
   },
 
   onLoad() {
@@ -139,6 +156,81 @@ Page({
     wx.switchTab({ url: '/pages/timetable/index' });
   },
 
+  /* ---------- 拍照导入 ---------- */
+
+  /**
+   * 选图：优先相机，也允许从相册选（用户可能已经有教务系统截图）。
+   * 微信要求拍照/选图必须由用户点击触发，不能自动调起。
+   */
+  onPickImage() {
+    wx.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['camera', 'album'],
+      sizeType: ['compressed'],
+      success: (res) => {
+        const file = res.tempFiles && res.tempFiles[0];
+        if (!file) return;
+        this.setData({
+          imagePath: file.tempFilePath,
+          imageError: '',
+          parsed: []      // 换图后清掉上一次的结果，避免误确认
+        });
+      },
+      fail: (err) => {
+        // 用户主动取消不算错误
+        if (err && String(err.errMsg || '').indexOf('cancel') >= 0) return;
+        this.setData({ imageError: '打开相机/相册失败，请重试' });
+      }
+    });
+  },
+
+  onClearImage() {
+    this.setData({ imagePath: '', imageError: '', imageHint: '', parsed: [] });
+  },
+
+  /**
+   * 识别入口：压缩 → 上传云存储 → 云函数调视觉模型 → 复用同一套校验与预览。
+   * 与对话建表走同一条管线的不同输入形态，结果结构完全一致。
+   */
+  async onParseImage() {
+    const filePath = this.data.imagePath;
+    if (!filePath) {
+      wx.showToast({ title: '请先选择一张课表图片', icon: 'none' });
+      return;
+    }
+
+    this.setData({
+      recognizing: true,
+      imageError: '',
+      imageHint: '正在压缩并上传图片…',
+      parsed: []
+    });
+
+    try {
+      const res = await aiApi.parseCoursesFromImage(filePath, {
+        onProgress: (stage) => {
+          if (!this.data.recognizing) return;
+          this.setData({ imageHint: stage });
+        }
+      });
+
+      if (res.ok) {
+        this.setData({ parsed: res.list, usedAI: true, imageHint: '' });
+        // 识别成功且已有结果，切回结果区仍在当前 tab，用户可直接核对
+        wx.showToast({ title: `识别出 ${res.list.length} 门课`, icon: 'success' });
+        return;
+      }
+
+      this.setData({ imageError: res.message });
+    } catch (e) {
+      console.error('[build] 图片识别失败', e);
+      this.setData({ imageError: aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_ERROR) });
+    } finally {
+      this.setData({ recognizing: false, imageHint: '' });
+    }
+  },
+
   /* ---------- 对话建表 ---------- */
   onDialogInput(e) {
     this.setData({ dialogText: e.detail.value, parseError: '' });
@@ -151,9 +243,9 @@ Page({
   },
 
   /**
-   * 解析入口
-   * 当前为本地规则解析（离线可用）。接入云服务大模型后，
-   * 这里替换为流式调用，返回结构与 localParse 保持一致。
+   * 解析入口：走统一解析管线（api/ai.js）。
+   * 微信版本过低时管线返回 AI_UNAVAILABLE，这里自动回退本地规则解析，
+   * 保证旧版微信上功能仍然可用（只是识别能力弱一些）。
    */
   async onParse() {
     const text = (this.data.dialogText || '').trim();
@@ -162,29 +254,56 @@ Page({
       return;
     }
 
-    this.setData({ parsing: true, parseError: '', parsed: [] });
+    this.setData({
+      parsing: true,
+      parseError: '',
+      parsed: [],
+      streamHint: '正在解析…',
+      usedAI: false
+    });
+
     try {
-      const list = await this.parseByAI(text);
-      if (!list.length) {
-        this.setData({
-          parseError: '没太看懂,可以说得更具体一点,比如「周一三四节高数」'
-        });
+      const res = await aiApi.parseCourses(text, {
+        onProgress: (chunk, full) => {
+          // 只在仍有解析中时更新，避免流结束后的回调把提示又写回去
+          if (!this.data.parsing) return;
+          this.setData({ streamHint: `正在解析…已生成 ${full.length} 字` });
+        }
+      });
+
+      if (res.ok) {
+        this.setData({ parsed: res.list, usedAI: true, streamHint: '' });
+        return;
       }
-      this.setData({ parsed: list });
+
+      if (res.code === aiApi.PARSE_ERROR.AI_UNAVAILABLE) {
+        // 能力不具备 → 回退本地规则解析（离线可用）
+        console.info('[build] 小程序 AI 能力不可用，回退本地规则解析');
+        const list = this.localParse(text);
+        this.setData({
+          parsed: list,
+          usedAI: false,
+          parseError: list.length ? '' : aiApi.messageOf(aiApi.PARSE_ERROR.NO_COURSE)
+        });
+        return;
+      }
+
+      this.setData({ parseError: res.message });
     } catch (e) {
       console.error('[build] 解析失败', e);
-      this.setData({ parseError: '解析失败,可以改用下面的手工录入' });
+      this.setData({ parseError: aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_ERROR) });
     } finally {
-      this.setData({ parsing: false });
+      this.setData({ parsing: false, streamHint: '' });
     }
   },
 
   /**
-   * 解析实现。本地规则版：按标点切句，逐句抽取字段。
-   * 后续替换为云服务大模型流式调用，输出结构保持一致。
-   * @returns {Promise<object[]>} 结构化课程数组
+   * 本地规则解析（降级路径）。
+   * 按标点切句，逐句用正则抽字段；输出结构与 AI 管线保持一致
+   * （同样带 missing_fields），这样预览页不需要区分来源。
+   * @returns {object[]} 结构化课程数组
    */
-  async parseByAI(text) {
+  localParse(text) {
     const sentences = text.split(/[;；\n]+/).map((s) => s.trim()).filter(Boolean);
     const result = [];
 
@@ -276,10 +395,15 @@ Page({
     const list = this.data.parsed || [];
     if (!list.length) return;
 
-    // 结构校验：必填项
+    // 结构校验：必填项 + 周次必须可解析（模型或规则都可能给出非法周次）
     const invalid = list.find((c) => !c.name || !c.day_of_week || !c.start_slot);
     if (invalid) {
       wx.showToast({ title: '有课程缺少必填信息,请补齐', icon: 'none' });
+      return;
+    }
+    const badWeeks = list.find((c) => !parseWeeks(c.weeks).length);
+    if (badWeeks) {
+      wx.showToast({ title: '有课程周次格式有误,请检查', icon: 'none' });
       return;
     }
 
