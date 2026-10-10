@@ -192,30 +192,93 @@
         <text class="detail-name">{{detail.name}}</text>
         <text class="detail-source">{{detail.source_type}}</text>
       </view>
-      <view class="detail-row">
-        <text class="detail-label">时间</text>
-        <text class="detail-value">{{detail.weekText}} · {{detail.slotText}}</text>
-      </view>
-      <view class="detail-row">
-        <text class="detail-label">节次</text>
-        <text class="detail-value">{{detail.timeText}}</text>
-      </view>
-      <view class="detail-row">
-        <text class="detail-label">周次</text>
-        <text class="detail-value">{{detail.weeksText}}</text>
-      </view>
-      <view class="detail-row">
-        <text class="detail-label">教师</text>
-        <text class="detail-value">{{detail.teacher || '—'}}</text>
-      </view>
-      <view class="detail-row">
-        <text class="detail-label">地点</text>
-        <text class="detail-value">{{detail.location || '—'}}</text>
-      </view>
-      <view class="detail-actions">
-        <view class="btn btn-ghost detail-btn" bindtap="onCloseDetail">关闭</view>
-        <view class="btn detail-btn detail-btn-danger" bindtap="onDeleteCourse">删除</view>
-      </view>
+
+      <!-- 编辑态 -->
+      <block wx:if="{{editing}}">
+        <view class="edit-form">
+          <view class="field">
+            <text class="label"><text class="required">*</text>课程名称</text>
+            <input class="input" value="{{editForm.name}}" data-field="name" bindinput="onEditInput"
+                   placeholder="如 高等数学" placeholder-class="input-ph" maxlength="20" />
+          </view>
+
+          <view class="field-row">
+            <view class="field half">
+              <text class="label">教师</text>
+              <input class="input" value="{{editForm.teacher}}" data-field="teacher" bindinput="onEditInput"
+                     placeholder="选填" placeholder-class="input-ph" maxlength="20" />
+            </view>
+            <view class="field half">
+              <text class="label">地点</text>
+              <input class="input" value="{{editForm.location}}" data-field="location" bindinput="onEditInput"
+                     placeholder="选填" placeholder-class="input-ph" maxlength="20" />
+            </view>
+          </view>
+
+          <view class="field">
+            <text class="label">星期</text>
+            <picker mode="selector" range="{{dayLabels}}" value="{{editForm.dayIndex}}" bindchange="onPickEditDay">
+              <view class="picker">{{dayLabels[editForm.dayIndex]}}</view>
+            </picker>
+          </view>
+
+          <view class="field-row">
+            <view class="field half">
+              <text class="label">开始节次</text>
+              <picker mode="selector" range="{{slotOptions}}" value="{{editForm.startSlot - 1}}" bindchange="onPickEditStartSlot">
+                <view class="picker">第 {{editForm.startSlot}} 节</view>
+              </picker>
+            </view>
+            <view class="field half">
+              <text class="label">连续节数</text>
+              <picker mode="selector" range="{{slotOptions}}" value="{{editForm.slotCount - 1}}" bindchange="onPickEditSlotCount">
+                <view class="picker">{{editForm.slotCount}} 节</view>
+              </picker>
+            </view>
+          </view>
+
+          <view class="field">
+            <text class="label">周次</text>
+            <input class="input" value="{{editForm.weeks}}" data-field="weeks" bindinput="onEditInput"
+                   placeholder="1-16 / 1-16 单 / 3,5,7" placeholder-class="input-ph" />
+            <text class="hint">支持 1-16、1-16 单、1-16 双、3,5,7、1-8,10-16</text>
+          </view>
+        </view>
+
+        <view class="detail-actions">
+          <view class="btn btn-ghost detail-btn" bindtap="onCancelEdit">取消</view>
+          <view class="btn btn-primary detail-btn" bindtap="onSaveEdit">保存</view>
+        </view>
+      </block>
+
+      <!-- 只读态 -->
+      <block wx:else>
+        <view class="detail-row">
+          <text class="detail-label">时间</text>
+          <text class="detail-value">{{detail.weekText}} · {{detail.slotText}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">节次</text>
+          <text class="detail-value">{{detail.timeText}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">周次</text>
+          <text class="detail-value">{{detail.weeksText}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">教师</text>
+          <text class="detail-value">{{detail.teacher || '—'}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">地点</text>
+          <text class="detail-value">{{detail.location || '—'}}</text>
+        </view>
+        <view class="detail-actions">
+          <view class="btn btn-ghost detail-btn" bindtap="onOpenEditDetail">编辑</view>
+          <view class="btn btn-ghost detail-btn" bindtap="onCloseDetail">关闭</view>
+          <view class="btn detail-btn detail-btn-danger" bindtap="onDeleteCourse">删除</view>
+        </view>
+      </block>
     </view>
   </view>
 
