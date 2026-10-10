@@ -591,6 +591,86 @@ const storeApi = require(path.join(M, 'api/store'));
   ok('未建立关系时抛出可读错误（不再静默返回空）',
     relationErr.indexOf('NO_RELATION') >= 0 || relationErr.indexOf('尚未') >= 0);
 
+  /* ============ 36. 课程编辑（点击课程卡片修改参数） ============ */
+  // 云模式下 updateCourse 走 doc(id).update —— 云端 id 是字符串文档 id，
+  // 本地模式走 store.update（按 id 匹配）。两条路径都要覆盖。
+  group('【36】课程编辑 updateCourse');
+
+  // --- 云路径：先验证云模式下的调用形态 ---
+  const updateCalls = [];
+  global.wx.cloud.database = () => ({
+    collection(name) {
+      return {
+        doc(id) {
+          return {
+            update({ data }) {
+              updateCalls.push({ collection: name, id, data });
+              return Promise.resolve({ stats: { updated: 1 } });
+            }
+          };
+        }
+      };
+    }
+  });
+
+  const cloudPatch = await courseApi.updateCourse('docABC', {
+    name: '高等数学（下）',
+    day_of_week: 2,
+    start_slot: 3,
+    slot_count: 2,
+    weeks: '1-16 单'
+  });
+  eq('云模式走 courses 集合', updateCalls[0].collection, 'courses');
+  eq('云模式以 id 定位文档', updateCalls[0].id, 'docABC');
+  eq('云模式提交编辑后的课程名', updateCalls[0].data.name, '高等数学（下）');
+  eq('云模式提交星期（周一=1）', updateCalls[0].data.day_of_week, 2);
+  eq('云模式提交开始节次', updateCalls[0].data.start_slot, 3);
+  eq('云模式提交连续节数', updateCalls[0].data.slot_count, 2);
+  eq('云模式提交周次规则', updateCalls[0].data.weeks, '1-16 单');
+  eq('云模式返回体带 id', cloudPatch.id, 'docABC');
+
+  // --- 本地路径：切回本地模式，验证字段真的落库 ---
+  clientApi.initClient({ useCloud: false });
+  eq('客户端已切回本地模式', clientApi.getMode(), 'local');
+
+  const tmp = await courseApi.addCourse({
+    name: '大学物理',
+    teacher: '王老师',
+    location: 'A101',
+    day_of_week: 1,
+    start_slot: 1,
+    slot_count: 2,
+    weeks: '1-16'
+  });
+
+  const edited = await courseApi.updateCourse(tmp.id, {
+    name: '大学物理（实验）',
+    teacher: '李老师',
+    location: 'B203',
+    day_of_week: 4,
+    start_slot: 3,
+    slot_count: 1,
+    weeks: '3,5,7'
+  });
+  eq('本地模式返回编辑后的课程名', edited.name, '大学物理（实验）');
+  eq('本地模式返回新星期', edited.day_of_week, 4);
+
+  const reread = (await courseApi.listCourses()).find((c) => String(c.id) === String(tmp.id));
+  ok('编辑后能重新读回该课程', !!reread);
+  eq('落库：课程名已更新', reread.name, '大学物理（实验）');
+  eq('落库：教师已更新', reread.teacher, '李老师');
+  eq('落库：地点已更新', reread.location, 'B203');
+  eq('落库：星期已更新', reread.day_of_week, 4);
+  eq('落库：开始节次已更新', reread.start_slot, 3);
+  eq('落库：连续节数已更新', reread.slot_count, 1);
+  eq('落库：周次规则已更新', reread.weeks, '3,5,7');
+  eq('编辑不改变课程总数', (await courseApi.listCourses()).filter(
+    (c) => String(c.id) === String(tmp.id)).length, 1);
+
+  // --- 边界：id 不存在时本地 store.update 返回 null（静默），不抛错 ---
+  const missing = await courseApi.updateCourse(999999, { name: '不存在的课' });
+  eq('本地模式：id 不存在返回 null', missing, null);
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);

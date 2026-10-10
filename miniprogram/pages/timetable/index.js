@@ -21,11 +21,12 @@ const {
   formatDate,
   currentWeekOf,
   todayPosition,
-  currentTimeStr
+  currentTimeStr,
+  parseWeeks
 } = require('../../utils/week');
 const { colorOf, softOf } = require('../../utils/color');
 const { buildSlotAxis, formatSlotTime, getTotalSlots, toMinutes } = require('../../utils/schedule');
-const { listCourses, removeCourse } = require('../../api/course');
+const { listCourses, removeCourse, updateCourse } = require('../../api/course');
 const timetableApi = require('../../api/timetable');
 const config = require('../../config');
 
@@ -99,6 +100,13 @@ Page({
     error: '',
     detail: null,
     hasAnyCourse: false,
+
+    // 课程详情编辑态：editing 为 true 时，详情卡片内切换为编辑表单
+    editing: false,
+    editForm: { name: '', teacher: '', location: '', dayIndex: 0, startSlot: 1, slotCount: 1, weeks: '1-16' },
+    // 节次下拉候选（1..totalSlots），编辑时防越界
+    slotOptions: [1, 2, 3, 4, 5, 6],
+    maxSlot: 6,
 
     showWeekPicker: false,
 
@@ -537,10 +545,22 @@ Page({
       slotAxis: axis,
       totalSlots: getTotalSlots()
     }, () => {
+      this.refreshSlotOptions();
       // 行数 / 行结构变了，重建轨道；行高变化由 computeLayout 处理
       if (this.data.panels && this.data.panels.length) this.renderTrack();
       if (this._ready) setTimeout(() => this.computeLayout(), 0);
     });
+  },
+
+  /**
+   * 生成节次候选（1..totalSlots）。作息配置可变，故每次刷新作息时重算，
+   * 编辑课程的「开始节次 / 连续节数」picker 与越界校验都依赖它。
+   */
+  refreshSlotOptions() {
+    const total = getTotalSlots();
+    const slotOptions = [];
+    for (let i = 1; i <= total; i++) slotOptions.push(i);
+    this.setData({ slotOptions, maxSlot: total });
   },
 
   buildWeekList() {
@@ -624,6 +644,7 @@ Page({
                     span: Number(course.slot_count) || 1,
                     startSlot: Number(course.start_slot),
                     slotCount: Number(course.slot_count) || 1,
+                    dayOfWeek: d,
                     timeText: formatSlotTime(course.start_slot, course.slot_count),
                     weeks: course.weeks,
                     source_type: course.source_type
@@ -974,6 +995,7 @@ Page({
     const slotEnd = course.startSlot + course.slotCount - 1;
 
     this.setData({
+      editing: false,
       detail: {
         ...course,
         slotText: `第 ${course.startSlot}-${slotEnd} 节`,
@@ -985,7 +1007,106 @@ Page({
   },
 
   onCloseDetail() {
-    this.setData({ detail: null });
+    this.setData({ detail: null, editing: false });
+  },
+
+  /* ---------- 详情内联编辑 ---------- */
+
+  /**
+   * 进入编辑态：把课程块字段回填到表单。
+   * 注意课程块里字段是驼峰（startSlot/slotCount），API 侧要下划线，
+   * 保存时再映射回去（见 onSaveEdit）。
+   */
+  onOpenEditDetail() {
+    const detail = this.data.detail;
+    if (!detail) return;
+    this.setData({
+      editing: true,
+      editForm: {
+        name: detail.name || '',
+        teacher: detail.teacher || '',
+        location: detail.location || '',
+        dayIndex: Math.max(0, (Number(detail.dayOfWeek) || 1) - 1),
+        startSlot: Number(detail.startSlot) || 1,
+        slotCount: Number(detail.slotCount) || 1,
+        weeks: detail.weeks || ''
+      }
+    });
+  },
+
+  onCancelEdit() {
+    this.setData({ editing: false });
+  },
+
+  /**
+   * 表单输入统一入口：<input data-field="name" bindinput="onEditInput" />
+   */
+  onEditInput(e) {
+    const field = e.currentTarget.dataset.field;
+    if (!field) return;
+    this.setData({ [`editForm.${field}`]: e.detail.value });
+  },
+
+  onPickEditDay(e) {
+    this.setData({ 'editForm.dayIndex': Number(e.detail.value) });
+  },
+
+  onPickEditStartSlot(e) {
+    this.setData({ 'editForm.startSlot': Number(e.detail.value) + 1 });
+  },
+
+  onPickEditSlotCount(e) {
+    this.setData({ 'editForm.slotCount': Number(e.detail.value) + 1 });
+  },
+
+  /**
+   * 保存前的三项校验，与 build 页 validateForm 同源，保证两处口径一致
+   */
+  validateEditForm() {
+    const f = this.data.editForm;
+    if (!String(f.name || '').trim()) return '请填写课程名称';
+    if (!parseWeeks(f.weeks).length) return '周次格式有误，例如 1-16 或 1-16 单';
+    const endSlot = Number(f.startSlot) + Number(f.slotCount) - 1;
+    if (endSlot > this.data.maxSlot) {
+      return `节次超出范围：第 ${f.startSlot} 节连上 ${f.slotCount} 节会超过第 ${this.data.maxSlot} 节`;
+    }
+    return '';
+  },
+
+  async onSaveEdit() {
+    const detail = this.data.detail;
+    if (!detail) return;
+
+    const msg = this.validateEditForm();
+    if (msg) {
+      wx.showToast({ title: msg, icon: 'none' });
+      return;
+    }
+
+    const f = this.data.editForm;
+    // 只提交白名单字段：驼峰 → 下划线，并 trim 掉首尾空格
+    const patch = {
+      name: String(f.name).trim(),
+      teacher: String(f.teacher || '').trim(),
+      location: String(f.location || '').trim(),
+      day_of_week: Number(f.dayIndex) + 1,
+      start_slot: Number(f.startSlot),
+      slot_count: Number(f.slotCount),
+      weeks: String(f.weeks || '').trim()
+    };
+
+    wx.showLoading({ title: '保存中' });
+    try {
+      await updateCourse(detail.id, patch);
+      wx.hideLoading();
+      this.setData({ detail: null, editing: false });
+      wx.showToast({ title: '已保存', icon: 'success' });
+      await this.loadCourses();
+    } catch (err) {
+      wx.hideLoading();
+      console.error('[timetable] 保存课程失败', err);
+      wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+    }
   },
 
   onDeleteCourse() {

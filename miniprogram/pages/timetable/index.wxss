@@ -510,10 +510,13 @@
 /* ---------- 课程详情卡片 ---------- */
 .detail-card {
   width: 600rpx;
+  max-height: 78vh;
   background: var(--color-surface);
   border-radius: 20rpx;
   padding: 36rpx 32rpx 24rpx;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .detail-head {
@@ -567,4 +570,65 @@
 .detail-btn-danger {
   background: #fff1f0;
   color: var(--color-danger);
+}
+
+/* ---------- 详情内联编辑表单 ---------- */
+/* 字段较多，允许在卡片内滚动（卡片整体限高 78vh） */
+.edit-form {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 8rpx;
+}
+
+.edit-form .field {
+  margin-bottom: 24rpx;
+}
+
+.edit-form .field-row {
+  display: flex;
+}
+
+.edit-form .field.half {
+  flex: 1;
+}
+
+.edit-form .field.half + .field.half {
+  margin-left: 20rpx;
+}
+
+.edit-form .label {
+  display: block;
+  font-size: 26rpx;
+  color: var(--color-text-secondary);
+  margin-bottom: 12rpx;
+}
+
+.edit-form .required {
+  color: var(--color-danger);
+  margin-right: 4rpx;
+}
+
+.edit-form .input,
+.edit-form .picker {
+  height: 80rpx;
+  line-height: 80rpx;
+  background: var(--color-bg);
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  color: var(--color-text);
+  box-sizing: border-box;
+}
+
+.edit-form .input-ph {
+  color: var(--color-text-tertiary);
+}
+
+.edit-form .hint {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  margin-top: 10rpx;
+  line-height: 1.5;
 }
