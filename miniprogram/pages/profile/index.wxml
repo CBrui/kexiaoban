@@ -2,12 +2,22 @@
 
   <!-- 用户卡片 -->
   <view class="card user-card">
-    <view class="avatar">
-      <text>{{profile.nickname ? profile.nickname[0] : '我'}}</text>
-    </view>
+    <!-- 微信官方头像填写能力：open-type="chooseAvatar"，头像由微信安全提供 -->
+    <button class="avatar-btn" open-type="chooseAvatar" bind:chooseavatar="onChooseAvatar">
+      <image
+        wx:if="{{profile.avatar_url}}"
+        class="avatar-img"
+        src="{{profile.avatar_url}}"
+        mode="aspectFill"
+      />
+      <view wx:else class="avatar">
+        <text>{{profile.nickname ? profile.nickname[0] : '我'}}</text>
+      </view>
+    </button>
     <view class="user-info">
       <text class="user-name">{{profile.nickname || '未设置昵称'}}</text>
       <text class="user-sub">{{profile.college || '未填写院系'}} {{profile.major ? '· ' + profile.major : ''}}</text>
+      <text class="login-state">已通过微信登录</text>
     </view>
   </view>
 
@@ -54,7 +64,15 @@
     <view wx:if="{{editMode}}" class="edit-area">
       <view class="field">
         <text class="label">昵称</text>
-        <input class="input" value="{{form.nickname}}" data-field="nickname" bindinput="onInput" />
+        <!-- type="nickname"：键盘上方会出现「使用微信昵称」快捷填充（官方能力） -->
+        <input
+          class="input"
+          type="nickname"
+          value="{{form.nickname}}"
+          data-field="nickname"
+          bindinput="onInput"
+          placeholder="点击可使用微信昵称"
+        />
       </view>
       <view class="field">
         <text class="label">院系</text>

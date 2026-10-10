@@ -2,11 +2,31 @@
 
   <!-- 输入区 -->
   <view class="card">
-    <view class="section-title">输入对方邀请码</view>
+    <view class="section-title">选择要一起比对的同学</view>
+
+    <!-- 已绑定同学多选 -->
+    <view wx:if="{{friendChips.length}}" class="friend-chips">
+      <view
+        class="chip {{item.selected ? 'chip-on' : ''}}"
+        wx:for="{{friendChips}}"
+        wx:for-item="item"
+        wx:for-index="idx"
+        wx:key="owner_id"
+        data-idx="{{idx}}"
+        bindtap="onToggleFriend"
+        hover-class="chip-hover"
+      >
+        <text>{{item.nickname}}</text>
+      </view>
+    </view>
+    <view wx:else class="chips-empty">
+      <text>还没有绑定的同学，输入对方邀请码即可添加</text>
+    </view>
+
     <view class="code-row">
       <input
         class="code-input"
-        placeholder="6 位邀请码"
+        placeholder="邀请码临时添加一位同学"
         value="{{inviteCode}}"
         bindinput="onInputCode"
         maxlength="6"
@@ -28,7 +48,7 @@
         </picker>
       </view>
     </view>
-    <text class="hint">起床/就寝节次用于裁掉你不参与的时段，让结果更实用</text>
+    <text class="hint">起床/就寝节次用于裁掉你不参与的时段；「空闲」按全员都空计算</text>
   </view>
 
   <!-- 兜底提示 -->
@@ -41,13 +61,22 @@
   <!-- 结果区：可视化网格 -->
   <view wx:if="{{hasGrid}}" class="card">
     <view class="section-title">空闲对齐图 · 共 {{freeSegments}} 段共同空闲</view>
+    <view class="participants">{{participantsLabel}}</view>
+    <view wx:if="{{skippedNote}}" class="skip-note">{{skippedNote}}</view>
 
-    <!-- 图例 -->
+    <!-- 图例：2 人 / 多人 各自的口径 -->
     <view class="legend">
-      <view class="legend-item"><view class="legend-swatch legend-free"></view><text>都有空</text></view>
-      <view class="legend-item"><view class="legend-swatch legend-clash"></view><text>撞课</text></view>
-      <view class="legend-item"><view class="legend-swatch legend-mine"></view><text>我忙</text></view>
-      <view class="legend-item"><view class="legend-swatch legend-theirs"></view><text>对方忙</text></view>
+      <block wx:if="{{gridMode === 'duo'}}">
+        <view class="legend-item"><view class="legend-swatch legend-free"></view><text>都有空</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-clash"></view><text>撞课</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-mine"></view><text>我忙</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-theirs"></view><text>对方忙</text></view>
+      </block>
+      <block wx:else>
+        <view class="legend-item"><view class="legend-swatch legend-free"></view><text>全员都有空</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-clash"></view><text>全员都没空</text></view>
+        <view class="legend-item"><view class="legend-swatch legend-partial"></view><text>部分空闲（格内为空闲人数/总人数）</text></view>
+      </block>
     </view>
 
     <!-- 周次切换 -->
@@ -86,7 +115,7 @@
 
     <!-- 空闲时段明细 -->
     <view wx:if="{{result.length}}" class="free-list">
-      <view class="free-list-title">空闲时段明细</view>
+      <view class="free-list-title">空闲时段明细（全员都空的时段）</view>
       <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
         <view class="week-group-head">
           <text class="week-badge">第 {{group.week}} 周</text>
@@ -101,7 +130,7 @@
 
   <!-- 未搜索且无结果时的引导 -->
   <view wx:if="{{!searched}}" class="empty-tip">
-    <text>输入同学邀请码，看看你们什么时候都有空</text>
+    <text>勾选同学或输入邀请码，看看大家什么时候都有空</text>
   </view>
 
 </view>

@@ -20,6 +20,7 @@
  * 动作（event.action）：
  *   - `findProfile`：{ inviteCode } → { ok, profile|null }
  *   - `getCourses` ：{ friendOwnerId } → { ok, courses }
+ *   - `listFriends`：→ { ok, friends:[{owner_id, nickname, avatar_url, ...}] }
  */
 const cloud = require('wx-server-sdk');
 
@@ -89,6 +90,41 @@ async function getCourses(friendOwnerId, myOwnerId) {
   return ok({ courses: res.data || [] });
 }
 
+/**
+ * 列出与我绑定的同学（带昵称/头像），供找搭子页的多选列表展示。
+ *
+ * 为什么走云函数：relations 只有「我 → 对方」方向的文档能被我读到，
+ * 但对方的 profiles 是 PRIVATE 的，昵称必须由服务端补齐。
+ * 只回传与我存在绑定关系的同学的展示字段，不透出其它任何数据。
+ */
+async function listFriends(openid) {
+  const rels = await db.collection(RELATIONS).where({ owner_id: openid }).get();
+  const ids = Array.from(new Set(
+    (rels.data || []).map((r) => r && r.friend_owner_id).filter(Boolean)
+  ));
+  if (!ids.length) return ok({ friends: [] });
+
+  const _ = db.command;
+  const res = await db.collection(PROFILES).where({ _openid: _.in(ids) }).get();
+
+  // 以关系表为准（保证顺序与去重），档案缺失的同学回退为空昵称
+  const byId = {};
+  (res.data || []).forEach((doc) => { byId[ownerIdOf(doc)] = doc; });
+
+  const friends = ids.map((id) => {
+    const doc = byId[id] || {};
+    return {
+      owner_id: id,
+      nickname: doc.nickname || '',
+      avatar_url: doc.avatar_url || '',
+      college: doc.college || '',
+      major: doc.major || '',
+      class_name: doc.class_name || ''
+    };
+  });
+  return ok({ friends });
+}
+
 exports.main = async (event) => {
   const { OPENID } = cloud.getWXContext();
   if (!OPENID) return fail('NO_IDENTITY', '未取得调用者身份');
@@ -97,6 +133,7 @@ exports.main = async (event) => {
   try {
     if (action === 'findProfile') return await findProfile(event.inviteCode);
     if (action === 'getCourses') return await getCourses(event.friendOwnerId, OPENID);
+    if (action === 'listFriends') return await listFriends(OPENID);
     return fail('UNKNOWN_ACTION', '未知动作：' + action);
   } catch (e) {
     console.error('[findBuddy] 执行失败', action, e);

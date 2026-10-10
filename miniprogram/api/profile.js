@@ -90,12 +90,44 @@ async function backfillCloudOwner(db, docOrId) {
 }
 
 /**
+ * 云模式登录：优先走 auth 云函数（服务端以 OPENID 为身份锚点找/建档案）。
+ *
+ * 为什么优先走云函数（微信登录的正路）：
+ *   1. 身份由平台保证 —— 服务端 getWXContext().OPENID，客户端无法伪造；
+ *   2. 邀请码服务端查重，杜绝撞码（PRIVATE 权限下客户端查不了全表）；
+ *   3. 档案由服务端一次性建好并带全 owner_id，不再需要回读回填补丁。
+ *
+ * 兜底：云函数未部署 / 调用失败时，回退到旧客户端链路（建档案 + 回读回填），
+ * 保证登录永不因单个环节失败而完全不可用。
+ */
+async function ensureProfileCloud(db) {
+  try {
+    const res = await getClient().callFunction({
+      name: 'auth',
+      data: { action: 'login' }
+    });
+    const r = (res && res.result) || null;
+    if (r && r.ok && r.profile) {
+      return normalizeProfile(r.profile);
+    }
+    console.warn('[profile] auth.login 未成功，回退客户端建档链路', r && (r.error || r.message));
+  } catch (e) {
+    console.warn('[profile] auth 云函数不可用（可能未部署），回退客户端建档链路', e);
+  }
+  return null;
+}
+
+/**
  * 登录并确保档案存在
  * @returns {Promise<object|null>} 档案记录（一定带 owner_id）
  */
 async function ensureProfile() {
   if (getMode() === 'cloud') {
     const db = getClient().database();
+
+    // 0. 微信登录正路：服务端找/建档案
+    const viaCloud = await ensureProfileCloud(db);
+    if (viaCloud) return viaCloud;
 
     // 1. 查档案（行级安全策略保证只返回当前用户的记录）
     const found = await db.collection(TABLE).get();
@@ -108,13 +140,14 @@ async function ensureProfile() {
     const created = await db.collection(TABLE).add({
       data: {
         nickname: '',
+        avatar_url: '',
         college: '',
         major: '',
         class_name: '',
         invite_code: inviteCode,
         free_note: '',
         wake_slot: 1,
-        sleep_slot: 12,
+        sleep_slot: 6,
         updated_at: Date.now()
       }
     });
@@ -145,13 +178,14 @@ async function ensureProfile() {
   return normalizeProfile(await store.insert(TABLE, {
     owner_id: ownerId,
     nickname: '我',
+    avatar_url: '',
     college: '',
     major: '',
     class_name: '',
     invite_code: genInviteCode(),
     free_note: '',
     wake_slot: 1,
-    sleep_slot: 12,
+    sleep_slot: 6,
     updated_at: Date.now()
   }));
 }
@@ -198,11 +232,16 @@ async function findByInviteCode(code) {
  * 建立同学关系（单向绑定）
  * 单独建表，不要直接在 profiles 里塞数组。
  *
+ * @param {string} myOwnerId 我的身份标识
+ * @param {string} friendOwnerId 对方身份标识
+ * @param {object} [friendMeta] 对方展示信息 { nickname, avatar_url }，存进关系表
+ *        —— 找搭子页的多选列表直接用它显示昵称，避免为显示名字再查一轮档案
+ *
  * 说明：owner_id 是「当前登录身份」的规范化别名（见 normalizeProfile），
  * 云模式下它等于平台写入的 _openid —— 显式写进关系表，是为了让
  * 「按 owner_id 查关系」在云 / 本地两种模式下语义一致、也便于排查。
  */
-async function bindFriend(myOwnerId, friendOwnerId) {
+async function bindFriend(myOwnerId, friendOwnerId, friendMeta) {
   if (!myOwnerId || !friendOwnerId) {
     throw new Error('绑定失败：用户标识缺失');
   }
@@ -211,6 +250,10 @@ async function bindFriend(myOwnerId, friendOwnerId) {
   }
 
   const TABLE_REL = 'relations';
+  const meta = {
+    friend_nickname: (friendMeta && friendMeta.nickname) || '',
+    friend_avatar_url: (friendMeta && friendMeta.avatar_url) || ''
+  };
 
   if (getMode() === 'cloud') {
     const db = getClient().database();
@@ -218,24 +261,40 @@ async function bindFriend(myOwnerId, friendOwnerId) {
       .collection(TABLE_REL)
       .where({ friend_owner_id: friendOwnerId })
       .get();
-    if (exist.data && exist.data.length) return exist.data[0];
+    if (exist.data && exist.data.length) {
+      // 老关系缺昵称时补一次（幂等）
+      const rel = exist.data[0];
+      if (meta.friend_nickname && !rel.friend_nickname) {
+        try {
+          await db.collection(TABLE_REL).doc(rel._id).update({ data: meta });
+        } catch (e) {
+          console.warn('[profile] 补存好友昵称失败（不影响绑定）', e);
+        }
+      }
+      return rel;
+    }
     const res = await db.collection(TABLE_REL).add({
-      data: { owner_id: myOwnerId, friend_owner_id: friendOwnerId, created_at: Date.now() }
+      data: Object.assign(
+        { owner_id: myOwnerId, friend_owner_id: friendOwnerId, created_at: Date.now() },
+        meta
+      )
     });
-    return { id: res._id, owner_id: myOwnerId, friend_owner_id: friendOwnerId };
+    return Object.assign(
+      { id: res._id, owner_id: myOwnerId, friend_owner_id: friendOwnerId },
+      meta
+    );
   }
 
   const rows = await store.select(TABLE_REL, { owner_id: myOwnerId, friend_owner_id: friendOwnerId });
   if (rows.length) return rows[0];
-  return store.insert(TABLE_REL, {
-    owner_id: myOwnerId,
-    friend_owner_id: friendOwnerId,
-    created_at: Date.now()
-  });
+  return store.insert(TABLE_REL, Object.assign(
+    { owner_id: myOwnerId, friend_owner_id: friendOwnerId, created_at: Date.now() },
+    meta
+  ));
 }
 
 /**
- * 列出已绑定的同学
+ * 列出已绑定的同学（本地模式 / 旧链路，只回关系表原始记录）
  */
 async function listFriends(myOwnerId) {
   if (getMode() === 'cloud') {
@@ -246,12 +305,42 @@ async function listFriends(myOwnerId) {
   return store.select('relations', { owner_id: myOwnerId });
 }
 
+/**
+ * 列出已绑定同学（带昵称/头像），供找搭子页多选列表。
+ * 云模式走 findBuddy.listFriends（服务端补齐 PRIVATE 档案里的昵称），
+ * 失败时回退到关系表里的 friend_nickname。
+ */
+async function listFriendProfiles(myOwnerId) {
+  if (getMode() === 'cloud') {
+    try {
+      const res = await getClient().callFunction({
+        name: 'findBuddy',
+        data: { action: 'listFriends' }
+      });
+      const r = (res && res.result) || null;
+      if (r && r.ok && Array.isArray(r.friends)) return r.friends;
+      console.warn('[profile] listFriends 未成功，回退关系表昵称', r && (r.error || r.message));
+    } catch (e) {
+      console.warn('[profile] listFriends 云函数不可用，回退关系表昵称', e);
+    }
+  }
+  const rels = await listFriends(myOwnerId);
+  return (rels || [])
+    .filter((r) => r && r.friend_owner_id)
+    .map((r) => ({
+      owner_id: r.friend_owner_id,
+      nickname: r.friend_nickname || '',
+      avatar_url: r.friend_avatar_url || ''
+    }));
+}
+
 module.exports = {
   ensureProfile,
   updateProfile,
   findByInviteCode,
   bindFriend,
   listFriends,
+  listFriendProfiles,
   genInviteCode,
   normalizeProfile
 };

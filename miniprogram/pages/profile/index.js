@@ -7,6 +7,7 @@ const app = getApp();
 const { updateProfile } = require('../../api/profile');
 const { listCourses } = require('../../api/course');
 const timetableApi = require('../../api/timetable');
+const { getMode, getClient } = require('../../api/client');
 
 Page({
   data: {
@@ -77,6 +78,36 @@ Page({
       data: profile.invite_code,
       success: () => wx.showToast({ title: '邀请码已复制', icon: 'success' })
     });
+  },
+
+  /**
+   * 选择微信头像（open-type="chooseAvatar"）。
+   * 拿到的是临时路径，云模式下先传云存储再落库（fileID 可直接用于 <image>）；
+   * 本地模式没有云存储，仅本次会话可见。
+   */
+  async onChooseAvatar(e) {
+    const tempUrl = e.detail && e.detail.avatarUrl;
+    const profile = this.data.profile;
+    if (!tempUrl || !profile) return;
+
+    wx.showLoading({ title: '更新头像' });
+    try {
+      let finalUrl = tempUrl;
+      if (getMode() === 'cloud' && wx.cloud && wx.cloud.uploadFile) {
+        const cloudPath = `avatars/${profile.owner_id}-${Date.now()}.jpg`;
+        const up = await getClient().uploadFile({ cloudPath, filePath: tempUrl });
+        finalUrl = up.fileID;
+      }
+      await updateProfile(profile.id, { avatar_url: finalUrl });
+      app.globalData.user = { ...profile, avatar_url: finalUrl };
+      this.setData({ profile: app.globalData.user });
+      wx.hideLoading();
+      wx.showToast({ title: '头像已更新', icon: 'success' });
+    } catch (err) {
+      wx.hideLoading();
+      console.error('[profile] 更新头像失败', err);
+      wx.showToast({ title: '头像更新失败，请重试', icon: 'none' });
+    }
   },
 
   onToggleEdit() {

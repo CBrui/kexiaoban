@@ -133,6 +133,115 @@ function alignGrid(coursesA, coursesB, options = {}) {
 }
 
 /**
+ * N 人共同空闲（**全员都空**才算空闲）。
+ *
+ * 多人版的语义与 alignFree 一致，只是「空闲」的判定从
+ * 「2 人都空」推广为「所有人都空」。
+ *
+ * @param {object[]} courseLists 课程列表的数组，如 [我的课程, 同学A, 同学B]
+ * @param {object} [options] { wakeSlot, sleepSlot } 裁掉不参与的时段
+ * @returns {{weeks:number[], result:Array<{week:number, slots:Array<{day,from,to}>}>}}
+ */
+function alignFreeMulti(courseLists, options = {}) {
+  const sets = (courseLists || []).map((c) => expandAll(c));
+  if (!sets.length) return { weeks: [], result: [] };
+
+  const weeksSet = new Set();
+  sets.forEach((set) => {
+    [...set].forEach((k) => weeksSet.add(Number(k.split('-')[0])));
+  });
+  const weekList = Array.from(weeksSet).sort((a, b) => a - b);
+
+  const grids = sets.map((set) => toWeekGrid(set, weekList));
+
+  const wakeSlot = Number(options.wakeSlot) || 1;
+  const sleepSlot = Number(options.sleepSlot) || 12;
+
+  const result = [];
+  for (const w of weekList) {
+    const slots = [];
+    for (let d = 0; d < 7; d++) {
+      let run = null;
+      for (let s = 0; s < 12; s++) {
+        if (s + 1 < wakeSlot || s + 1 > sleepSlot) {
+          if (run) { slots.push(run); run = null; }
+          continue;
+        }
+        const free = grids.every((g) => !g[w][d][s]);
+        if (free && !run) {
+          run = { day: d + 1, from: s + 1, to: s + 1 };
+        } else if (free && run) {
+          run.to = s + 1;
+        } else if (!free && run) {
+          slots.push(run);
+          run = null;
+        }
+      }
+      if (run) slots.push(run);
+    }
+    if (slots.length) result.push({ week: w, slots });
+  }
+
+  return { weeks: weekList, result };
+}
+
+/**
+ * N 人网格：每格记录 {state, freeCount, total}，供多人比对图渲染。
+ *
+ * state：
+ *   free     全员都空 —— 高亮
+ *   clash    全员都忙（撞课）—— 标灰
+ *   partial  部分人忙 —— 界面显示「freeCount/total 空闲」
+ *   out      起床/就寝范围之外
+ *
+ * @param {object[]} courseLists 课程列表的数组
+ * @param {object} [options] { slotCount, wakeSlot, sleepSlot }
+ * @returns {{weeks, grid, slotCount, wakeSlot, sleepSlot, total}}
+ *   grid[week][day 0..6][slot 0..slotCount-1] = { state, freeCount, total }
+ */
+function alignGridMulti(courseLists, options = {}) {
+  const slotCount = Number(options.slotCount) || 12;
+  const wakeSlot = Number(options.wakeSlot) || 1;
+  const sleepSlot = Number(options.sleepSlot) || slotCount;
+
+  const sets = (courseLists || []).map((c) => expandAll(c));
+  const total = sets.length;
+  if (!total) {
+    return { weeks: [], grid: {}, slotCount, wakeSlot, sleepSlot, total };
+  }
+
+  const weeksSet = new Set();
+  sets.forEach((set) => {
+    [...set].forEach((k) => weeksSet.add(Number(k.split('-')[0])));
+  });
+  const weeks = Array.from(weeksSet).sort((a, b) => a - b);
+
+  const grids = sets.map((set) => toWeekGrid(set, weeks));
+
+  const grid = {};
+  for (const w of weeks) {
+    const days = [];
+    for (let d = 0; d < 7; d++) {
+      const row = [];
+      for (let s = 0; s < slotCount; s++) {
+        if (s + 1 < wakeSlot || s + 1 > sleepSlot) {
+          row.push({ state: 'out', freeCount: 0, total });
+          continue;
+        }
+        const busy = grids.reduce((n, g) => n + (g[w][d][s] ? 1 : 0), 0);
+        const freeCount = total - busy;
+        const state = freeCount === total ? 'free' : freeCount === 0 ? 'clash' : 'partial';
+        row.push({ state, freeCount, total });
+      }
+      days.push(row);
+    }
+    grid[w] = days;
+  }
+
+  return { weeks, grid, slotCount, wakeSlot, sleepSlot, total };
+}
+
+/**
  * 判定「对方是否尚未建课表」
  * 产品分水岭：若对方无课表，应提示「对方还没建课表」，
  * 而不是显示「全天有空」——后者技术上正确但会误导用户。
@@ -146,5 +255,7 @@ module.exports = {
   alignFree,
   alignFreeWithRange,
   alignGrid,
+  alignFreeMulti,
+  alignGridMulti,
   isCounterpartEmpty
 };
