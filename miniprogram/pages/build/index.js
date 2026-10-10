@@ -43,7 +43,11 @@ Page({
     imagePath: '',           // 已选图片的本地临时路径（用于预览）
     recognizing: false,      // 图片识别中
     imageHint: '',           // 识别进度提示
+    imageElapsed: 0,         // 识别已耗时（秒），用于可视化等待
     imageError: '',          // 识别错误提示
+    fastMode: false,         // 快速识别：跳过版式分析，省约 4 秒（周次可能读不到）
+    weeksHint: '',           // 课表版式规则摘要（周次写在哪），拍图识别后展示
+    weeksEvidence: '',       // 图上与周次有关的原文，供用户核对
 
     // missing_fields 里的字段名 → 中文标签（WXML 里直接索引取用）
     missingLabel: {
@@ -64,6 +68,14 @@ Page({
   onShow() {
     // 从节次设置页返回时，总大节数可能已变化，需刷新节次选项
     this.refreshSlotOptions();
+  },
+
+  onUnload() {
+    // 识别计时器必须随页面销毁清掉，否则页面已卸载定时器还在 setData
+    if (this._recognizeTimer) {
+      clearInterval(this._recognizeTimer);
+      this._recognizeTimer = null;
+    }
   },
 
   refreshSlotOptions() {
@@ -186,7 +198,17 @@ Page({
   },
 
   onClearImage() {
-    this.setData({ imagePath: '', imageError: '', imageHint: '', parsed: [] });
+    this.setData({ imagePath: '', imageError: '', imageHint: '', parsed: [], weeksHint: '', weeksEvidence: '' });
+  },
+
+  /**
+   * 切换识别模式。
+   * 完整模式（默认）：云函数先做一次课表版式分析（周次写在哪），再提取课程 ——
+   * 实测多约 4 秒，但周次写在标题 / 图例 / 分块时也能读出来。
+   * 快速模式：跳过版式分析，只跑一次提取 —— 快，但上述版式的周次可能读不到。
+   */
+  onToggleFast(e) {
+    this.setData({ fastMode: !!(e.detail && e.detail.value) });
   },
 
   /**
@@ -204,11 +226,24 @@ Page({
       recognizing: true,
       imageError: '',
       imageHint: '正在压缩并上传图片…',
+      imageElapsed: 0,
+      weeksHint: '',
+      weeksEvidence: '',
       parsed: []
     });
 
+    // 视觉模型读一张课表要 45 秒上下，期间若界面一动不动，用户会当成卡死并
+    // 提前退出（真机一旦切后台，callFunction 就会被断开并报错）。用秒表把
+    // 等待可视化，让用户知道「还在跑」。
+    const tickStart = Date.now();
+    this._recognizeTimer = setInterval(() => {
+      if (!this.data.recognizing) return;
+      this.setData({ imageElapsed: Math.round((Date.now() - tickStart) / 1000) });
+    }, 1000);
+
     try {
       const res = await aiApi.parseCoursesFromImage(filePath, {
+        fast: this.data.fastMode,
         onProgress: (stage) => {
           if (!this.data.recognizing) return;
           this.setData({ imageHint: stage });
@@ -216,7 +251,26 @@ Page({
       });
 
       if (res.ok) {
-        this.setData({ parsed: res.list, usedAI: true, imageHint: '' });
+        const hint = this.buildWeeksHint(res.layout);
+        let weeksHint = hint.text;
+        let weeksEvidence = hint.evidence;
+        if (!res.layout && this.data.fastMode) {
+          // 快速模式没有版式分析。若仍有用例没读到周次，明确告诉用户怎么补救，
+          // 而不是让他在预览页里自己发现「待补充」。
+          const miss = res.list.filter(
+            (c) => (c.missing_fields || []).indexOf('weeks') >= 0
+          ).length;
+          weeksHint = miss
+            ? `快速模式：有 ${miss} 门课没读到周次，关掉「快速识别」重试可提高准确率`
+            : '快速模式：已跳过课表版式分析';
+        }
+        this.setData({
+          parsed: res.list,
+          usedAI: true,
+          imageHint: '',
+          weeksHint,
+          weeksEvidence
+        });
         // 识别成功且已有结果，切回结果区仍在当前 tab，用户可直接核对
         wx.showToast({ title: `识别出 ${res.list.length} 门课`, icon: 'success' });
         return;
@@ -227,8 +281,35 @@ Page({
       console.error('[build] 图片识别失败', e);
       this.setData({ imageError: aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_ERROR) });
     } finally {
-      this.setData({ recognizing: false, imageHint: '' });
+      if (this._recognizeTimer) {
+        clearInterval(this._recognizeTimer);
+        this._recognizeTimer = null;
+      }
+      this.setData({ recognizing: false, imageHint: '', imageElapsed: 0 });
     }
+  },
+
+  /**
+   * 把版式规则总结成一行提示。用户反馈过「识别不到周数」，把「周次写在哪」
+   * 和「图上原文」摆出来，用户就能立刻判断是模型没读到、还是本来就没有。
+   */
+  buildWeeksHint(layout) {
+    if (!layout) return { text: '', evidence: '' };
+
+    const parts = [];
+    if (layout.weeksSourceText) parts.push(layout.weeksSourceText);
+    if (layout.mapping && layout.mapping.length) {
+      const m = layout.mapping
+        .map((x) => (x.scope ? `${x.scope}：${x.weeks}` : x.weeks))
+        .join('；');
+      parts.push(m);
+    }
+    const text = parts.length ? `课表规则：${parts.join('，')}` : '';
+
+    // 图上周次原文可能有几百字，展示只留开头一段
+    let evidence = layout.weeksEvidence || '';
+    if (evidence.length > 60) evidence = evidence.slice(0, 60) + '…';
+    return { text, evidence };
   },
 
   /* ---------- 对话建表 ---------- */
@@ -259,7 +340,10 @@ Page({
       parseError: '',
       parsed: [],
       streamHint: '正在解析…',
-      usedAI: false
+      usedAI: false,
+      // 对话建表没有版式分析这一步，清掉拍图遗留的规则提示
+      weeksHint: '',
+      weeksEvidence: ''
     });
 
     try {

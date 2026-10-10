@@ -24,7 +24,7 @@ const {
   currentTimeStr,
   parseWeeks
 } = require('../../utils/week');
-const { colorOf, softOf } = require('../../utils/color');
+const { colorOf, softOf, buildColorMap } = require('../../utils/color');
 const { buildSlotAxis, formatSlotTime, getTotalSlots, toMinutes } = require('../../utils/schedule');
 const { listCourses, removeCourse, updateCourse } = require('../../api/course');
 const timetableApi = require('../../api/timetable');
@@ -632,6 +632,9 @@ Page({
           const course = findCourseAt(this.courses, week, d, s);
           if (course) {
             const isStart = Number(course.start_slot) === s;
+            // 优先用整表颜色表（保证异课异色）；表里没有时退回单点哈希取色
+            const color =
+              (this.courseColorMap && this.courseColorMap[course.name]) || colorOf(course.name);
             col.push(
               isStart
                 ? {
@@ -639,8 +642,8 @@ Page({
                     name: course.name,
                     teacher: course.teacher,
                     location: course.location,
-                    color: colorOf(course.name),
-                    bg: softOf(colorOf(course.name)),
+                    color,
+                    bg: softOf(color),
                     span: Number(course.slot_count) || 1,
                     startSlot: Number(course.start_slot),
                     slotCount: Number(course.slot_count) || 1,
@@ -842,6 +845,10 @@ Page({
     try {
       const courses = await listCourses();
       this.courses = courses || [];
+      // 颜色表按「整张课表的课程集合」一次性算好：同一门课恒定同色，
+      // 不同课程互不撞色（详见 utils/color.js）。放在这里算而不是逐格算，
+      // 是为了让消重结果对所有格子一致。
+      this.courseColorMap = buildColorMap(this.courses.map((c) => c.name));
       this.setData({ courseCount: this.courses.length, hasAnyCourse: this.courses.length > 0 });
       this.renderTrack();
     } catch (err) {

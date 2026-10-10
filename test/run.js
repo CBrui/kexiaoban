@@ -35,7 +35,7 @@ const {
 const { expandCourse, expandAll, toWeekGrid } = require(path.join(M, 'logic/course-expand'));
 const { alignFree, alignFreeWithRange, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
 const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRange } = require(path.join(M, 'logic/dnd-rule'));
-const { colorOf } = require(path.join(M, 'utils/color'));
+const { colorOf, softOf, buildColorMap, PALETTE } = require(path.join(M, 'utils/color'));
 const schedule = require(path.join(M, 'utils/schedule'));
 const { normalizeProfile } = require(path.join(M, 'api/profile'));
 
@@ -990,6 +990,196 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('兼容：批量识别不丢课程', aliasList.list.length, 2);
   eq('兼容：批量识别字段完整', aliasList.list[0].missing_fields.length, 0);
   eq('兼容：title/room 别名生效', aliasList.list[1].location, 'B203');
+
+  // —— 场景 F：真实图片识别耗时 45s+，失败时要能定位到原因 ——
+  // 用户实测反馈「拍照导入显示 AI 服务暂时不可用」，但客户端此前只打
+  // code + message，把云函数回传的 detail/code 丢了，导致无从排查。
+  // 这里锁住「服务端失败必须把诊断信息透出，且不能污染错误码本身」。
+  const modelErr = await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async () => ({
+      ok: false, error: 'MODEL_ERROR', message: '图片识别服务暂时不可用',
+      detail: 'request timeout', code: 'ESOCKETTIMEDOUT', ms: 15077
+    })
+  });
+  eq('诊断：服务端失败仍映射为 MODEL_ERROR', modelErr.code, 'MODEL_ERROR');
+  eq('诊断：透出服务端 detail', modelErr.serverDetail, 'request timeout');
+  eq('诊断：透出服务端 code', modelErr.serverCode, 'ESOCKETTIMEDOUT');
+  ok('诊断：错误码不被附加字段覆盖', modelErr.code === 'MODEL_ERROR');
+
+  // 调用器直接抛错（客户端先断开）时，超时给专门的错误码与文案
+  const timeoutErr = await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async () => { throw { errMsg: 'cloud.callFunction:fail timeout' }; }
+  });
+  eq('诊断：超时映射为 MODEL_TIMEOUT', timeoutErr.code, 'MODEL_TIMEOUT');
+  ok('诊断：超时有独立文案', aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_TIMEOUT).indexOf('超时') >= 0);
+
+  // —— 场景 G：周次写成「第1-16周」（截图里的常见写法）——
+  eq('周次兼容：「第1-16周」可解析', parseWeeks('第1-16周').length, 16);
+  eq('周次兼容：「第3-5周」可解析', parseWeeks('第3-5周').join(','), '3,4,5');
+  eq('周次兼容：「第1-16周单周」仍识别单周',
+    parseWeeks('第1-16周单周').join(','), '1,3,5,7,9,11,13,15');
+
+  /* ============ 【41】课表版式规则（两阶段识别） ============ */
+  // 用户反馈「识别不到周数」：真实课表的周次常常不在格子里（标题 / 图例 /
+  // 按周次分块 / 用颜色区分）。两阶段识别先让模型读懂版式规则，再把规则注入
+  // 提取提示词。这里锁住客户端对规则的解析、兜底与透传行为。
+  group('【41】课表版式规则（两阶段识别）');
+
+  // —— 分块版式（左右两表各管一段周次）——
+  const layoutBlock = aiApi.parseLayout(JSON.stringify({
+    title: '电子信息 1 班课表',
+    axis_x: ['周一', '周二'],
+    axis_y: ['第1节', '第2节'],
+    weeks_source: 'block',
+    weeks_evidence: ['第1-8周', '第9-16周'],
+    weeks_mapping: [
+      { scope: '左侧表格', weeks: '第1-8周' },
+      { scope: '右侧表格', weeks: '第9-16周' }
+    ]
+  }));
+  ok('版式：分块来源解析', layoutBlock && layoutBlock.weeksSource === 'block');
+  eq('版式：来源中文文案', layoutBlock.weeksSourceText, '表格按周次分块');
+  eq('版式：映射条数', layoutBlock.mapping.length, 2);
+  eq('版式：映射内容', layoutBlock.mapping[0].weeks, '第1-8周');
+  // 分块周次绝不能整体套用（左表 1-8、右表 9-16 是两个不同范围）
+  eq('版式：分块不给整表兜底', aiApi.globalWeeksOf(layoutBlock), '');
+
+  // —— 标题版式（整表统一周次）——
+  const layoutHeader = aiApi.parseLayout(JSON.stringify({
+    weeks_source: 'header',
+    weeks_evidence: '适用周次：第 1-16 周',
+    weeks_mapping: [{ scope: '整个表格', weeks: '1-16周' }]
+  }));
+  ok('版式：标题来源解析', layoutHeader && layoutHeader.weeksSource === 'header');
+  eq('版式：整表统一周次可兜底', aiApi.globalWeeksOf(layoutHeader), '1-16周');
+
+  // —— 颜色 + 图例版式（最难：周次只靠底色）——
+  const layoutColor = aiApi.parseLayout(JSON.stringify({
+    weeks_source: 'color',
+    weeks_evidence: '图例：浅蓝=1-16周，浅绿=1-8周',
+    weeks_mapping: [
+      { scope: '浅蓝色单元格', weeks: '1-16周' },
+      { scope: '浅绿色单元格', weeks: '1-8周' }
+    ]
+  }));
+  ok('版式：颜色来源解析', layoutColor && layoutColor.weeksSource === 'color');
+  eq('版式：颜色来源中文文案', layoutColor.weeksSourceText, '用颜色区分周次');
+  // 多条映射同样不能整体兜底
+  eq('版式：多条映射不给整表兜底', aiApi.globalWeeksOf(layoutColor), '');
+
+  // —— 容错：模型裹代码块 / 加前言 ——
+  const noisyLayout = aiApi.parseLayout('好的，我来分析：\n```json\n{"weeks_source":"cell","weeks_mapping":[]}\n```');
+  ok('版式：容错解析带代码块输出', noisyLayout && noisyLayout.weeksSource === 'cell');
+  eq('版式：无法解析时返回 null', aiApi.parseLayout('这张图看不清'), null);
+  eq('版式：空输入返回 null', aiApi.parseLayout(''), null);
+  eq('版式：null 输入返回 null', aiApi.parseLayout(null), null);
+
+  // —— 兜底只在「该条没写周次」时生效，且不得覆盖已有值 ——
+  const fbList = aiApi.normalizeList([
+    { name: '甲课', day_of_week: 1, start_slot: 1, weeks: null },
+    { name: '乙课', day_of_week: 2, start_slot: 1, weeks: '9-16' }
+  ], 6, { fallbackWeeks: '1-16周' });
+  eq('兜底：没写周次的课程被补上', fbList.list[0].weeks, '1-16周');
+  eq('兜底：补上后不再算缺失', fbList.list[0].missing_fields.length, 0);
+  eq('兜底：已有周次不被覆盖', fbList.list[1].weeks, '9-16');
+
+  // 没有兜底时，周次仍然记为缺失（保持「不猜」原则）
+  const noFb = aiApi.normalizeList([{ name: '丙课', day_of_week: 1, start_slot: 1 }], 6);
+  ok('兜底：无兜底时周次记缺失', noFb.list[0].missing_fields.indexOf('weeks') >= 0);
+  // 兜底值本身无法解析时不能塞进去（如「每周」这种）
+  const badFb = aiApi.normalizeList([{ name: '丁课', day_of_week: 1, start_slot: 1 }], 6,
+    { fallbackWeeks: '每周' });
+  ok('兜底：不可解析的兜底值被忽略', badFb.list[0].missing_fields.indexOf('weeks') >= 0);
+
+  // —— 只写「单周」「双周」没有区间时，按全学期展开 ——
+  eq('周次：单独写「单周」可解析', parseWeeks('单周').length > 0, true);
+  eq('周次：「单周」只含奇数周', parseWeeks('单周').every((w) => w % 2 === 1), true);
+  eq('周次：「双周」只含偶数周', parseWeeks('双周').every((w) => w % 2 === 0), true);
+  // 全角连接符（截图里常见）
+  eq('周次：全角破折号「1—16」', parseWeeks('1—16').length, 16);
+  eq('周次：全角波浪「1～16」', parseWeeks('1～16').length, 16);
+
+  // —— 云函数返回 layout 时，页面能拿到（透传不丢）——
+  const withLayout = await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async () => ({
+      ok: true,
+      raw: '[{"name":"电路分析","day_of_week":1,"start_slot":1,"slot_count":2,"weeks":null}]',
+      layout: '{"weeks_source":"header","weeks_evidence":"第1-16周","weeks_mapping":[{"scope":"整个表格","weeks":"1-16周"}]}'
+    })
+  });
+  ok('透传：识别结果带出版式规则', withLayout.ok && !!withLayout.layout);
+  eq('透传：版式来源正确', withLayout.layout && withLayout.layout.weeksSource, 'header');
+  eq('透传：缺周次的课程被整表周次兜底', withLayout.list[0].weeks, '1-16周');
+  eq('透传：兜底后无缺失字段', withLayout.list[0].missing_fields.length, 0);
+
+  /* ============ 【42】课程配色与识别快速模式 ============ */
+  group('【42】课程配色（同课同色 + 异课异色）与快速模式');
+
+  // —— 配色：同一门课恒定同色 ——
+  eq('配色：同名同色（两次调用一致）', colorOf('高等数学'), colorOf('高等数学'));
+  ok('配色：调色板已扩到 12 色', PALETTE.length === 12);
+
+  const colorNames = ['高等数学', '大学英语', '数据结构', '线性代数', '计算机网络',
+    '操作系统', '体育', '软件工程', '概率论', '电路分析'];
+  const cmap = buildColorMap(colorNames);
+  const cvals = colorNames.map((n) => cmap[n]);
+  eq('配色：10 门课 10 种颜色（无撞色）', new Set(cvals).size, 10);
+  // 旧实现（纯哈希 8 色）实测这 10 门课只有 5 种颜色、3 组撞色
+  ok('配色：颜色均取自调色板', cvals.every((c) => PALETTE.indexOf(c) >= 0));
+
+  // —— 稳定性与顺序无关性 ——
+  ok('配色：重复计算结果一致',
+    JSON.stringify(buildColorMap(colorNames)) === JSON.stringify(cmap));
+  ok('配色：与传入顺序无关',
+    JSON.stringify(buildColorMap(colorNames.slice().reverse())) === JSON.stringify(cmap));
+
+  // —— 边界 ——
+  eq('配色：空列表返回空表', Object.keys(buildColorMap([])).length, 0);
+  eq('配色：null 输入不抛错', Object.keys(buildColorMap(null)).length, 0);
+  const withBlank = buildColorMap([' 高等数学 ', '', null, '高等数学']);
+  eq('配色：去重 + 去空白后只剩一项', Object.keys(withBlank).length, 1);
+  eq('配色：去空白后键名正确', Object.keys(withBlank)[0], '高等数学');
+
+  // 课程数超过调色板容量时允许复用，但不能抛错
+  const many = [];
+  for (let i = 0; i < 20; i++) many.push('课程' + i);
+  const manyMap = buildColorMap(many);
+  eq('配色：20 门课都能取到色', Object.keys(manyMap).length, 20);
+  ok('配色：超出容量时复用仍落在调色板内',
+    Object.keys(manyMap).every((k) => PALETTE.indexOf(manyMap[k]) >= 0));
+
+  // 浅色底：同色系 14% 透明度
+  eq('配色：softOf 生成浅色底', softOf('#5B8FF9'), 'rgba(91, 143, 249, 0.14)');
+
+  // —— 快速模式：应把 layout:false 透传给云函数 ——
+  let fastArg = null;
+  const fastRes = await aiApi.parseCoursesFromImage('local.jpg', {
+    fast: true,
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async (fileID, extra) => {
+      fastArg = extra;
+      return {
+        ok: true,
+        raw: '[{"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2,"weeks":"1-16"}]'
+      };
+    }
+  });
+  ok('快速模式：识别成功', fastRes.ok && fastRes.list.length === 1);
+  ok('快速模式：向云函数传了 layout:false', fastArg && fastArg.layout === false);
+
+  // 完整模式（默认）不得传 layout:false，否则会白白丢掉版式分析
+  let normalArg = 'unset';
+  await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async (fileID, extra) => {
+      normalArg = extra;
+      return { ok: true, raw: '[{"name":"英语","day_of_week":2,"start_slot":1,"weeks":"1-16"}]' };
+    }
+  });
+  ok('完整模式：未传 layout:false', !normalArg || normalArg.layout !== false);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

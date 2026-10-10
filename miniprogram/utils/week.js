@@ -28,8 +28,20 @@ function parseWeeks(text) {
   const isEven = /双/.test(text);
 
   // 去掉「单双周」字样及其「周」后缀，只留数字区间部分
-  const body = text.replace(/(单|双)周?/g, '').replace(/周/g, '').trim();
-  if (!body) return [];
+  // 「第」也一并去掉：课表截图里常写成「第1-16周」，模型会原样搬过来，
+  // 不去掉的话下面的区间正则匹配不上，整条周次会被判为无效。
+  const body = text.replace(/(单|双)周?/g, '').replace(/周/g, '').replace(/第/g, '').trim();
+
+  // 只写了「单周」/「双周」而没有区间的情况（课表里很常见，意思是整学期的
+  // 奇数周 / 偶数周）。以前这里直接 return []，整条周次被判为无效 —— 也是
+  // 「识别不到周数」的一种。这里按全学期范围展开，再由学期总周数去裁剪。
+  if (!body) {
+    if (!isOdd && !isEven) return [];
+    const all = [];
+    for (let i = 1; i <= MAX_WEEK; i++) all.push(i);
+    if (isOdd) return all.filter((w) => w % 2 === 1);
+    return all.filter((w) => w % 2 === 0);
+  }
 
   const result = new Set();
 
@@ -37,7 +49,9 @@ function parseWeeks(text) {
     const s = seg.trim();
     if (!s) continue;
 
-    const range = s.match(/^(\d+)\s*[-~至]\s*(\d+)$/);
+    // 区间连接符兼容半角/全角短横、波浪线、破折号与「至」：
+    // 截图里常见 "1—16"、"1－16"、"1～16"，只认 "-~至" 会整段丢掉。
+    const range = s.match(/^(\d+)\s*[-~—–－〜～至]\s*(\d+)$/);
     if (range) {
       const start = parseInt(range[1], 10);
       const end = parseInt(range[2], 10);
