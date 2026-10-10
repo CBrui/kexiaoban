@@ -75,12 +75,17 @@
         <view class="btn btn-ghost dialog-btn" bindtap="onUseExample">用示例</view>
         <view class="btn btn-primary dialog-btn" bindtap="onParse">{{parsing ? '解析中…' : '开始解析'}}</view>
       </view>
+      <view wx:if="{{parsing && streamHint}}" class="stream-hint">{{streamHint}}</view>
       <view wx:if="{{parseError}}" class="parse-error">{{parseError}}</view>
+      <view class="ai-notice">解析由 AI 生成，结果仅供参考，请核对后再写入</view>
     </view>
 
     <!-- 待确认列表 -->
     <view wx:if="{{parsed.length}}" class="card">
-      <view class="section-title">解析结果（{{parsed.length}} 门），确认后写入</view>
+      <view class="section-title">
+        解析结果（{{parsed.length}} 门），确认后写入
+        <text class="source-badge">{{usedAI ? 'AI 解析' : '本地识别'}}</text>
+      </view>
       <view class="parsed-item" wx:for="{{parsed}}" wx:key="index">
         <view class="parsed-head">
           <text class="parsed-index">#{{index + 1}}</text>
@@ -126,7 +131,7 @@
         </view>
 
         <view wx:if="{{item.missing_fields.length}}" class="missing-tag">
-          待补充：{{item.missing_fields}}
+          待补充：<text wx:for="{{item.missing_fields}}" wx:for-item="mf" wx:key="*this" class="missing-field">{{missingLabel[mf] || mf}} </text>
         </view>
       </view>
 

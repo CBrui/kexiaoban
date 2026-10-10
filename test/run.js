@@ -671,6 +671,160 @@ const storeApi = require(path.join(M, 'api/store'));
   const missing = await courseApi.updateCourse(999999, { name: '不存在的课' });
   eq('本地模式：id 不存在返回 null', missing, null);
 
+  /* ============ 37. AI 统一解析管线（api/ai.js） ============ */
+  // 对话建表与图片识别共用同一条管线：预处理 → 大模型(流式) → Schema 校验 → 结构化课程。
+  // 这里注入假模型（modelProvider）验证管线本身，不消耗真实 Token；
+  // 真实模型只在真机/现网验证，不进单测。
+  group('【37】AI 统一解析管线');
+
+  const aiApi = require(path.join(M, 'api/ai'));
+
+  // --- 预处理：全角标点会误导模型把一句拆成两门课，必须先归一化 ---
+  eq('预处理：全角逗号转半角', aiApi.preprocess('周一高数，A301'), '周一高数,A301');
+  eq('预处理：全角分号转半角', aiApi.preprocess('高数；英语'), '高数;英语');
+  eq('预处理：压掉多余空白', aiApi.preprocess('  高数   英语  '), '高数 英语');
+  ok('预处理：清掉零宽字符', aiApi.preprocess('高\u200B数') === '高数');
+  eq('预处理：null 安全', aiApi.preprocess(null), '');
+
+  // --- JSON 抽取：模型常裹 markdown 代码块或加前言，必须能兜底剥出来 ---
+  eq('抽取：纯 JSON 数组', JSON.stringify(aiApi.extractJSON('[{"name":"高数"}]')), '[{"name":"高数"}]');
+  eq('抽取：剥掉 ```json 代码块',
+    aiApi.extractJSON('```json\n[{"name":"高数"}]\n```')[0].name, '高数');
+  eq('抽取：带前言的响应',
+    aiApi.extractJSON('好的，解析结果如下：\n[{"name":"高数"}]')[0].name, '高数');
+  eq('抽取：完全不是 JSON 返回 null', aiApi.extractJSON('抱歉我不知道'), null);
+  eq('抽取：空串返回 null', aiApi.extractJSON(''), null);
+
+  // --- Schema 校验：合法输入原样通过 ---
+  const okItem = aiApi.normalizeItem({
+    name: '高等数学', day_of_week: 1, start_slot: 1, slot_count: 2,
+    teacher: '王老师', location: 'A301', weeks: '1-16'
+  }, 6);
+  eq('校验：课程名保留', okItem.name, '高等数学');
+  eq('校验：星期保留', okItem.day_of_week, 1);
+  eq('校验：连续节数保留', okItem.slot_count, 2);
+  eq('校验：合法项无缺失标记', okItem.missing_fields.length, 0);
+
+  // --- 核心原则：不认识就留空 + 标记，绝不猜 ---
+  const missingItem = aiApi.normalizeItem({ name: '大学物理' }, 6);
+  eq('校验：缺失星期记为 0', missingItem.day_of_week, 0);
+  eq('校验：缺失开始节次记为 0', missingItem.start_slot, 0);
+  ok('校验：缺失项进 missing_fields',
+    missingItem.missing_fields.indexOf('day_of_week') >= 0 &&
+    missingItem.missing_fields.indexOf('start_slot') >= 0 &&
+    missingItem.missing_fields.indexOf('weeks') >= 0);
+  eq('校验：缺失时连续节数兜底为 1', missingItem.slot_count, 1);
+
+  // --- 非法值必须被挡下，不能被当成合法值放过 ---
+  const badDay = aiApi.normalizeItem({ name: 'X', day_of_week: 9, start_slot: 1, weeks: '1-16' }, 6);
+  eq('校验：星期越界(9)判为缺失', badDay.day_of_week, 0);
+  const badSlot = aiApi.normalizeItem({ name: 'X', day_of_week: 1, start_slot: 99, weeks: '1-16' }, 6);
+  eq('校验：节次越界判为缺失', badSlot.start_slot, 0);
+  const badWeeks = aiApi.normalizeItem({ name: 'X', day_of_week: 1, start_slot: 1, weeks: '瞎写的' }, 6);
+  ok('校验：非法周次进 missing_fields', badWeeks.missing_fields.indexOf('weeks') >= 0);
+
+  // --- 连续节数越界要裁剪，而不是把整条记录丢掉 ---
+  const overflow = aiApi.normalizeItem(
+    { name: 'X', day_of_week: 1, start_slot: 5, slot_count: 10, weeks: '1-16' }, 6);
+  eq('校验：连续节数越界自动裁剪到边界', overflow.slot_count, 2);
+
+  // --- 中文数字 / 带单位的数字要能容错取整 ---
+  const strNum = aiApi.normalizeItem(
+    { name: 'X', day_of_week: '3', start_slot: '2节', slot_count: '2', weeks: '1-16' }, 6);
+  eq('校验：字符串数字可解析', strNum.day_of_week, 3);
+  eq('校验：带单位的值可解析', strNum.start_slot, 2);
+
+  // --- 完全无用的记录直接丢弃 ---
+  eq('校验：非对象返回 null', aiApi.normalizeItem('字符串', 6), null);
+  eq('校验：空对象返回 null', aiApi.normalizeItem({}, 6), null);
+  const mixed = aiApi.normalizeList(
+    [{ name: '高数', day_of_week: 1, start_slot: 1, weeks: '1-16' }, {}, '垃圾'], 6);
+  eq('批量校验：只保留合法项', mixed.list.length, 1);
+  eq('批量校验：统计被丢弃数', mixed.rejected, 2);
+  eq('批量校验：非数组输入安全', aiApi.normalizeList(null, 6).list.length, 0);
+
+  // --- 主入口：注入假模型，验证流式拼装与进度回调 ---
+  const fakeProvider = {
+    createModel() {
+      return {
+        async streamText({ data }) {
+          // 断言提示词确实约束了 JSON 输出（防止以后被改坏）
+          const sys = data.messages[0].content;
+          if (sys.indexOf('JSON') === -1) throw new Error('系统提示词丢失 JSON 约束');
+          const chunks = ['[{"name":"高等数学","day_of_week":1,', '"start_slot":1,"slot_count":2,',
+            '"teacher":"王老师","location":"A301","weeks":"1-16"}]'];
+          return {
+            textStream: (async function* () {
+              for (const c of chunks) yield c;
+            })()
+          };
+        }
+      };
+    }
+  };
+
+  const progress = [];
+  const parseRes = await aiApi.parseCourses('周一一二节高数 王老师 A301 1-16周', {
+    modelProvider: fakeProvider,
+    onProgress: (chunk, full) => progress.push(full.length)
+  });
+  ok('主入口：解析成功', parseRes.ok);
+  eq('主入口：返回 1 门课', parseRes.list.length, 1);
+  eq('主入口：课程名正确', parseRes.list[0].name, '高等数学');
+  eq('主入口：星期正确', parseRes.list[0].day_of_week, 1);
+  ok('主入口：流式进度回调被多次触发', progress.length >= 2);
+  ok('主入口：进度文本累积递增', progress[progress.length - 1] > progress[0]);
+
+  // --- 三层容错：解析为空 ---
+  const emptyRes = await aiApi.parseCourses('   ', { modelProvider: fakeProvider });
+  eq('容错：空输入被拦下', emptyRes.ok, false);
+  eq('容错：空输入错误码', emptyRes.code, aiApi.PARSE_ERROR.EMPTY_INPUT);
+  ok('容错：空输入有可展示文案', emptyRes.message.length > 0);
+
+  // --- 三层容错：模型返回不可解析内容 ---
+  const garbageProvider = {
+    createModel: () => ({
+      async streamText() {
+        return { textStream: (async function* () { yield '抱歉，我不太明白你的意思'; })() };
+      }
+    })
+  };
+  const badRes = await aiApi.parseCourses('随便说点什么', { modelProvider: garbageProvider });
+  eq('容错：模型输出非 JSON 时拒收', badRes.ok, false);
+  eq('容错：错误码为 BAD_OUTPUT', badRes.code, aiApi.PARSE_ERROR.BAD_OUTPUT);
+
+  // --- 三层容错：模型调用抛异常 ---
+  const throwProvider = {
+    createModel: () => ({
+      async streamText() { throw new Error('网络中断'); }
+    })
+  };
+  const errRes = await aiApi.parseCourses('周一高数', { modelProvider: throwProvider });
+  eq('容错：模型异常不抛出，转为错误码', errRes.code, aiApi.PARSE_ERROR.MODEL_ERROR);
+
+  // --- 三层容错：模型返回空数组 ---
+  const noneProvider = {
+    createModel: () => ({
+      async streamText() {
+        return { textStream: (async function* () { yield '[]'; })() };
+      }
+    })
+  };
+  const noneRes = await aiApi.parseCourses('今天天气不错', { modelProvider: noneProvider });
+  eq('容错：无可识别课程时给 NO_COURSE', noneRes.code, aiApi.PARSE_ERROR.NO_COURSE);
+
+  // --- 降级路径：环境不具备 AI 能力时给出 AI_UNAVAILABLE（交由页面回退本地解析）---
+  const savedCloud = global.wx.cloud;
+  delete global.wx.cloud;
+  const noAIRes = await aiApi.parseCourses('周一高数');
+  eq('降级：无 AI 能力时返回 AI_UNAVAILABLE', noAIRes.code, aiApi.PARSE_ERROR.AI_UNAVAILABLE);
+  eq('降级：isAIAvailable 为 false', aiApi.isAIAvailable(), false);
+  global.wx.cloud = savedCloud;
+
+  ok('降级：每个错误码都有中文文案',
+    Object.keys(aiApi.PARSE_ERROR).every((k) => aiApi.messageOf(aiApi.PARSE_ERROR[k]).length > 0));
+  eq('降级：默认模型为免费体验模型 hy3', aiApi.DEFAULT_MODEL, 'hy3');
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);

@@ -108,6 +108,24 @@
   padding: 20rpx 24rpx;
 }
 
+/* 流式解析进度（打字机提示） */
+.stream-hint {
+  margin-top: 20rpx;
+  font-size: 24rpx;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: 12rpx;
+  padding: 16rpx 24rpx;
+}
+
+/* AI 生成标识：过审需要，不能省 */
+.ai-notice {
+  margin-top: 20rpx;
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+
 /* ---------- 解析结果 ---------- */
 .parsed-item {
   border: 1rpx solid var(--color-border);
@@ -141,4 +159,21 @@
   background: #fff7e8;
   border-radius: 8rpx;
   padding: 10rpx 16rpx;
+}
+
+/* 解析来源标识（AI 解析 / 本地识别） */
+.source-badge {
+  display: inline-block;
+  margin-left: 12rpx;
+  font-size: 20rpx;
+  font-weight: 400;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: 6rpx;
+  padding: 4rpx 12rpx;
+  vertical-align: middle;
+}
+
+.missing-field {
+  margin-right: 12rpx;
 }
