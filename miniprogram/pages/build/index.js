@@ -45,6 +45,7 @@ Page({
     imageHint: '',           // 识别进度提示
     imageElapsed: 0,         // 识别已耗时（秒），用于可视化等待
     imageError: '',          // 识别错误提示
+    fastMode: false,         // 快速识别：跳过版式分析，省约 4 秒（周次可能读不到）
     weeksHint: '',           // 课表版式规则摘要（周次写在哪），拍图识别后展示
     weeksEvidence: '',       // 图上与周次有关的原文，供用户核对
 
@@ -201,6 +202,16 @@ Page({
   },
 
   /**
+   * 切换识别模式。
+   * 完整模式（默认）：云函数先做一次课表版式分析（周次写在哪），再提取课程 ——
+   * 实测多约 4 秒，但周次写在标题 / 图例 / 分块时也能读出来。
+   * 快速模式：跳过版式分析，只跑一次提取 —— 快，但上述版式的周次可能读不到。
+   */
+  onToggleFast(e) {
+    this.setData({ fastMode: !!(e.detail && e.detail.value) });
+  },
+
+  /**
    * 识别入口：压缩 → 上传云存储 → 云函数调视觉模型 → 复用同一套校验与预览。
    * 与对话建表走同一条管线的不同输入形态，结果结构完全一致。
    */
@@ -232,6 +243,7 @@ Page({
 
     try {
       const res = await aiApi.parseCoursesFromImage(filePath, {
+        fast: this.data.fastMode,
         onProgress: (stage) => {
           if (!this.data.recognizing) return;
           this.setData({ imageHint: stage });
@@ -240,12 +252,24 @@ Page({
 
       if (res.ok) {
         const hint = this.buildWeeksHint(res.layout);
+        let weeksHint = hint.text;
+        let weeksEvidence = hint.evidence;
+        if (!res.layout && this.data.fastMode) {
+          // 快速模式没有版式分析。若仍有用例没读到周次，明确告诉用户怎么补救，
+          // 而不是让他在预览页里自己发现「待补充」。
+          const miss = res.list.filter(
+            (c) => (c.missing_fields || []).indexOf('weeks') >= 0
+          ).length;
+          weeksHint = miss
+            ? `快速模式：有 ${miss} 门课没读到周次，关掉「快速识别」重试可提高准确率`
+            : '快速模式：已跳过课表版式分析';
+        }
         this.setData({
           parsed: res.list,
           usedAI: true,
           imageHint: '',
-          weeksHint: hint.text,
-          weeksEvidence: hint.evidence
+          weeksHint,
+          weeksEvidence
         });
         // 识别成功且已有结果，切回结果区仍在当前 tab，用户可直接核对
         wx.showToast({ title: `识别出 ${res.list.length} 门课`, icon: 'success' });

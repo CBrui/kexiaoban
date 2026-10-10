@@ -618,7 +618,9 @@ function removeImage(fileID) {
  * @param {Function} [options.callFunction] 依赖注入：云函数调用器（测试用）
  * @param {Function} [options.onProgress] 阶段进度回调 (stageText)
  * @param {boolean} [options.keepImage] 识别后是否保留云存储图片（默认删除）
- * @returns {Promise<{ok, list, code, message}>}
+ * @param {boolean} [options.fast] 快速模式：跳过版式分析，省约 4 秒
+ *   （代价见 recognizeTimetable 注释：周次写在标题/图例/分块时可能读不到）
+ * @returns {Promise<{ok, list, code, message, layout}>}
  */
 async function parseCoursesFromImage(filePath, options = {}) {
   if (!filePath) return fail(PARSE_ERROR.NO_FILE);
@@ -655,11 +657,13 @@ async function parseCoursesFromImage(filePath, options = {}) {
     }
 
     // 3) 调云函数（服务端调视觉模型）
-    report('正在识别课表…');
+    //    完整模式：先做版式分析（读懂周次写在哪）再提课程，周次更准但多约 4 秒；
+    //    快速模式（options.fast）：跳过版式分析，只跑一次提取。
+    report(options.fast ? '正在快速识别课表…' : '正在识别课表…');
     let res;
     const tCall = Date.now();
     try {
-      res = await cloudCall(fileID);
+      res = await cloudCall(fileID, { layout: options.fast ? false : undefined });
     } catch (e) {
       // 走到这里通常是「客户端先断开」：视觉模型单张课表要 45 秒以上，
       // 若用户切后台、息屏或网络抖动，callFunction 会先抛错，而云函数其实
@@ -750,11 +754,14 @@ function hasCloudChannel() {
   return typeof wx !== 'undefined' && !!(wx.cloud && wx.cloud.callFunction);
 }
 
-function defaultCallFunction(fileID) {
+function defaultCallFunction(fileID, extra) {
   if (typeof wx === 'undefined' || !wx.cloud || !wx.cloud.callFunction) return null;
+  const data = { fileID };
+  // 只显式传 false（快速模式），避免把 undefined 塞进 data 里
+  if (extra && extra.layout === false) data.layout = false;
   return wx.cloud.callFunction({
     name: 'recognizeTimetable',
-    data: { fileID },
+    data,
     // 注意：callFunction 的客户端等待有 **60 秒硬上限**（微信官方明确该接口
     // 对云函数超时的限制上限为 60 秒，控制台把云函数调到 300 秒也突破不了，
     // 超时报 -501002 / ESOCKETTIMEDOUT）。所以这里设 55000 只是「尽量用满」，

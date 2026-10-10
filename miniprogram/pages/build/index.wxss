@@ -126,6 +126,35 @@
   line-height: 1.5;
 }
 
+/* ---------- 识别模式开关 ---------- */
+.opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+  border-top: 1rpx solid var(--color-border);
+}
+
+.opt-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+  flex: 1;
+}
+
+.opt-title {
+  font-size: 28rpx;
+  color: var(--color-text);
+}
+
+.opt-desc {
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+}
+
 /* ---------- 解析结果 ---------- */
 
 /* 课表版式规则提示：周次最容易漏，把「周次写在哪」显式说出来 */

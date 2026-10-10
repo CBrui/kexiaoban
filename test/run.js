@@ -35,7 +35,7 @@ const {
 const { expandCourse, expandAll, toWeekGrid } = require(path.join(M, 'logic/course-expand'));
 const { alignFree, alignFreeWithRange, isCounterpartEmpty } = require(path.join(M, 'logic/free-align'));
 const { shouldNotify, shouldNotifyWithCalendar, buildCalendarIndex, inSilentRange } = require(path.join(M, 'logic/dnd-rule'));
-const { colorOf } = require(path.join(M, 'utils/color'));
+const { colorOf, softOf, buildColorMap, PALETTE } = require(path.join(M, 'utils/color'));
 const schedule = require(path.join(M, 'utils/schedule'));
 const { normalizeProfile } = require(path.join(M, 'api/profile'));
 
@@ -1114,6 +1114,72 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('透传：版式来源正确', withLayout.layout && withLayout.layout.weeksSource, 'header');
   eq('透传：缺周次的课程被整表周次兜底', withLayout.list[0].weeks, '1-16周');
   eq('透传：兜底后无缺失字段', withLayout.list[0].missing_fields.length, 0);
+
+  /* ============ 【42】课程配色与识别快速模式 ============ */
+  group('【42】课程配色（同课同色 + 异课异色）与快速模式');
+
+  // —— 配色：同一门课恒定同色 ——
+  eq('配色：同名同色（两次调用一致）', colorOf('高等数学'), colorOf('高等数学'));
+  ok('配色：调色板已扩到 12 色', PALETTE.length === 12);
+
+  const colorNames = ['高等数学', '大学英语', '数据结构', '线性代数', '计算机网络',
+    '操作系统', '体育', '软件工程', '概率论', '电路分析'];
+  const cmap = buildColorMap(colorNames);
+  const cvals = colorNames.map((n) => cmap[n]);
+  eq('配色：10 门课 10 种颜色（无撞色）', new Set(cvals).size, 10);
+  // 旧实现（纯哈希 8 色）实测这 10 门课只有 5 种颜色、3 组撞色
+  ok('配色：颜色均取自调色板', cvals.every((c) => PALETTE.indexOf(c) >= 0));
+
+  // —— 稳定性与顺序无关性 ——
+  ok('配色：重复计算结果一致',
+    JSON.stringify(buildColorMap(colorNames)) === JSON.stringify(cmap));
+  ok('配色：与传入顺序无关',
+    JSON.stringify(buildColorMap(colorNames.slice().reverse())) === JSON.stringify(cmap));
+
+  // —— 边界 ——
+  eq('配色：空列表返回空表', Object.keys(buildColorMap([])).length, 0);
+  eq('配色：null 输入不抛错', Object.keys(buildColorMap(null)).length, 0);
+  const withBlank = buildColorMap([' 高等数学 ', '', null, '高等数学']);
+  eq('配色：去重 + 去空白后只剩一项', Object.keys(withBlank).length, 1);
+  eq('配色：去空白后键名正确', Object.keys(withBlank)[0], '高等数学');
+
+  // 课程数超过调色板容量时允许复用，但不能抛错
+  const many = [];
+  for (let i = 0; i < 20; i++) many.push('课程' + i);
+  const manyMap = buildColorMap(many);
+  eq('配色：20 门课都能取到色', Object.keys(manyMap).length, 20);
+  ok('配色：超出容量时复用仍落在调色板内',
+    Object.keys(manyMap).every((k) => PALETTE.indexOf(manyMap[k]) >= 0));
+
+  // 浅色底：同色系 14% 透明度
+  eq('配色：softOf 生成浅色底', softOf('#5B8FF9'), 'rgba(91, 143, 249, 0.14)');
+
+  // —— 快速模式：应把 layout:false 透传给云函数 ——
+  let fastArg = null;
+  const fastRes = await aiApi.parseCoursesFromImage('local.jpg', {
+    fast: true,
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async (fileID, extra) => {
+      fastArg = extra;
+      return {
+        ok: true,
+        raw: '[{"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2,"weeks":"1-16"}]'
+      };
+    }
+  });
+  ok('快速模式：识别成功', fastRes.ok && fastRes.list.length === 1);
+  ok('快速模式：向云函数传了 layout:false', fastArg && fastArg.layout === false);
+
+  // 完整模式（默认）不得传 layout:false，否则会白白丢掉版式分析
+  let normalArg = 'unset';
+  await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async (fileID, extra) => {
+      normalArg = extra;
+      return { ok: true, raw: '[{"name":"英语","day_of_week":2,"start_slot":1,"weeks":"1-16"}]' };
+    }
+  });
+  ok('完整模式：未传 layout:false', !normalArg || normalArg.layout !== false);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

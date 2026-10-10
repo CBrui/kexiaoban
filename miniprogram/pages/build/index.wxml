@@ -105,6 +105,15 @@
         </view>
       </view>
 
+      <!-- 识别模式：完整模式先读版式再提课程（周次更准），快速模式跳过版式分析 -->
+      <view class="opt-row">
+        <view class="opt-label">
+          <text class="opt-title">快速识别</text>
+          <text class="opt-desc">{{fastMode ? '跳过版式分析，约快 4 秒（周次可能读不到）' : '先分析课表版式再识别，周次更准'}}</text>
+        </view>
+        <switch checked="{{fastMode}}" bindchange="onToggleFast" color="#3a7afe" />
+      </view>
+
       <!-- 已选图片预览 -->
       <view wx:if="{{imagePath}}" class="image-preview">
         <image class="image-thumb" src="{{imagePath}}" mode="aspectFit" />

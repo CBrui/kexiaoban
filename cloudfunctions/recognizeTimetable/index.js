@@ -111,31 +111,34 @@ const LAYOUT_PROMPT = [
   '这一步**不要提取课程**，只做一件事：读懂这张课表的「阅读规则」，供下一步提取课程使用。',
   '',
   '请输出一个 JSON 对象，字段名严格使用下面这些英文名，禁止改名、禁止增加字段：',
-  '  title             课表标题文字（原样抄写，没有则填 null）',
-  '  axis_x            横向表头，逐项列出，如 ["周一","周二","周三","周四","周五"]',
-  '  axis_y            纵向表头，逐项列出，如 ["第1节","第2节","第3节"]',
-  '  weeks_source      周次信息出现在哪里，只能取以下值之一：',
-  '                      "cell"   写在每个课程格子里（格子里有"1-16周"这类文字）',
-  '                      "header" 只写在标题或表头（如标题是"第1-16周课表"）',
-  '                      "legend" 写在图例/说明文字里（如底部"浅蓝=1-16周，浅黄=1-8周"）',
-  '                      "block"  表格按周次分成多块，每块有各自的标题',
-  '                      "color"  用颜色/底色区分，需要对照图例才能确定',
-  '                      "none"   图上确实没有任何周次信息',
-  '  weeks_evidence    把图上**所有**与周次有关的文字**原样抄下来**（标题里的、表头里的、',
+  '  weeks_source     周次信息出现在哪里，只能取以下值之一：',
+  '                     "cell"   写在每个课程格子里（格子里有"1-16周"这类文字）',
+  '                     "header" 只写在标题或表头（如标题是"第1-16周课表"）',
+  '                     "legend" 写在图例/说明文字里（如底部"浅蓝=1-16周，浅黄=1-8周"）',
+  '                     "block"  表格按周次分成多块，每块有各自的标题',
+  '                     "color"  用颜色/底色区分，需要对照图例才能确定',
+  '                     "none"   图上确实没有任何周次信息',
+  '  weeks_evidence   把图上**所有**与周次有关的文字**原样抄下来**（标题里的、表头里的、',
   '                    区块标题里的、图例里的、格子里的，全部抄）。这是最关键的一项，务必抄全。',
-  '  weeks_mapping     周次与适用范围的对应关系，数组，每项形如',
+  '  weeks_mapping    周次与适用范围的对应关系，数组，每项形如',
   '                    {"scope":"适用范围","weeks":"周次原文"}。',
-  '                    整表统一时： [{"scope":"整个表格","weeks":"1-16周"}]',
-  '                    分块时：     [{"scope":"左侧表格","weeks":"1-8周"},{"scope":"右侧表格","weeks":"9-16周"}]',
-  '                    没有则填 []',
-  '  slot_rule         节次编号说明：纵向表头如何编号、是否包含午休/晚间行、',
+  '                    scope 必须能指认到具体的课程格子，有多条时各不相同：',
+  '                      · 整表统一： [{"scope":"整个表格","weeks":"1-16周"}]',
+  '                      · 按颜色分： [{"scope":"浅蓝色格子","weeks":"1-16周"},',
+  '                                   {"scope":"浅绿色格子","weeks":"1-8周"},',
+  '                                   {"scope":"浅橙色格子","weeks":"9-16周"}]',
+  '                      · 按区块分： [{"scope":"左侧表格","weeks":"1-8周"},',
+  '                                   {"scope":"右侧表格","weeks":"9-16周"}]',
+  '                      · 周次写在每个格子里：填 []',
+  '                    ⚠️ 只要 weeks_source 不是 cell，就必须把对应关系**逐条写清**；',
+  '                    多条映射一律写成「整个表格」是错的（等于没给对应关系）。',
+  '  slot_rule        节次编号说明：纵向表头如何编号、是否包含午休/晚间行、',
   '                    是否两小节合并为一个大节。不确定填 null。',
-  '  cell_rule         格子里文字的组织方式，如"第一行课程名，第二行教师，第三行教室"',
   '  multi_course_rule 同一时段出现多门课时的表现形式（单双周交替 / 分周次并列 / 上下半学期不同课）',
-  '  notes             其他会影响判读的说明',
   '',
   '【铁律】',
   '只输出一个 JSON 对象。不要解释、不要加 markdown 代码块、不要加 <answer> 等标签。',
+  '**不要换行、不要缩进，输出紧凑的单行 JSON**（这一步只是给下一步传规则，省下的时间留给识别）。',
   '第一个字符必须是 { ，最后一个字符必须是 } 。',
   '看不清或图中没有的信息填 null，绝对不要猜测或编造周次。'
 ].join('\n');
@@ -154,6 +157,8 @@ const EXTRACT_PROMPT_BASE = [
   '',
   '【输出格式铁律】',
   '只输出一个 JSON 数组。不要输出任何解释、不要加 markdown 代码块、不要加 <answer> 等标签。',
+  '**不要换行、不要缩进，输出紧凑的单行 JSON**（实测模型生成速度约 40 token/秒，',
+  '换行与缩进纯属浪费生成时间，紧凑写法能省一成以上的耗时）。',
   '第一个字符必须是 [ ，最后一个字符必须是 ] 。',
   '字段名必须严格使用下面这 7 个英文名，禁止改名、禁止增加字段：',
   '  name         课程名（字符串）',
@@ -164,11 +169,8 @@ const EXTRACT_PROMPT_BASE = [
   '  location     上课地点（字符串）',
   '  weeks        周次规则（字符串，如 "1-16" 或 "1-16 单" 或 "1-16 双" 或 "3,5,7"）',
   '',
-  '【正确输出示例】（严格照此格式，注意字段名与数字类型）',
-  '[',
-  '  {"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2,"teacher":"张伟","location":"A101","weeks":"1-16"},',
-  '  {"name":"大学英语","day_of_week":1,"start_slot":3,"slot_count":1,"teacher":"李娜","location":"B203","weeks":"1-8"}',
-  ']',
+  '【正确输出示例】（严格照此格式：单行、无缩进、注意字段名与数字类型）',
+  '[{"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2,"teacher":"张伟","location":"A101","weeks":"1-16"},{"name":"大学英语","day_of_week":1,"start_slot":3,"slot_count":1,"teacher":"李娜","location":"B203","weeks":"1-8"}]',
   '',
   '【判读规则】',
   '1. 只填写图片中明确可见的信息。看不清或没有的字段一律填 null，绝对不要猜测或编造。',
@@ -191,7 +193,8 @@ const WEEKS_RULES = [
   '   - header 标题/表头给的是整张表的周次，把它套用到每一门课。',
   '   - legend 按图例说明（颜色、符号与周次的对应）确定每门课的周次。',
   '   - block  表格按周次分块，按课程所在区块的标题确定其周次。',
-  '   - color  按格子底色对照图例确定周次。',
+  '   - color  按格子底色对照图例确定周次。**必须逐个格子比对**：先把该格子归入',
+  '            图例里的某个颜色（如"浅绿"），再套用该颜色对应的周次。不要凭整体印象。',
   '2. weeks 一律填**周次规则原文的数字形式**，例如 "1-16"、"1-8"、"9-16"、',
   '   "1-16 单"、"1-16 双"、"3,5,7"。可以去掉「第」「周」等字，但不要换算成日期，',
   '   不要写「每周」「全学期」这类无法解析的话。',
@@ -202,15 +205,24 @@ const WEEKS_RULES = [
 
 /**
  * 把阶段一的版式分析结果拼进提取提示词。
- * @param {string} layoutRaw 阶段一模型返回的原始文本（可能是 JSON，也可能带杂质）
+ *
+ * 两个省 token（也就是省时间）的细节：
+ *   1. **压掉换行与缩进** —— 模型习惯把 JSON 打印成多行缩进格式，实测能占掉三成
+ *      以上的 token，而这里只是给模型看的上下文，紧凑单行完全等价。JSON 字符串
+ *      内部不可能出现裸换行（会被转义），所以批量压缩空白是安全的。
+ *   2. **限长 1200 字** —— 版式规则里真正影响周次的只有 weeks_source /
+ *      weeks_evidence / weeks_mapping 三项，截断尾部不会伤到关键信息。
+ *
+ * @param {string} layoutRaw 阶段一模型返回的原始文本
  */
 function buildExtractPrompt(layoutRaw) {
   const parts = [EXTRACT_PROMPT_BASE];
-  if (layoutRaw && String(layoutRaw).trim()) {
+  const compact = String(layoutRaw || '').replace(/\s+/g, ' ').trim();
+  if (compact) {
     parts.push(
       '',
       '【本张课表的版式规则（前一步已分析得出，必须遵守）】',
-      String(layoutRaw).trim().slice(0, 2000)
+      compact.slice(0, 1200)
     );
   }
   parts.push(WEEKS_RULES);
@@ -327,6 +339,7 @@ exports.main = async (event) => {
   let layoutRaw = '';
   let layoutMs = 0;
   let layoutError = '';
+  let layoutUsage = null;
 
   if (wantLayout) {
     const tLayout = Date.now();
@@ -338,14 +351,18 @@ exports.main = async (event) => {
           model: visionModel,
           messages: buildMessages(
             LAYOUT_PROMPT,
-            '请分析这张课表的版式规则，按要求的 JSON 对象输出。'
+            '请分析这张课表的版式规则，按要求的紧凑单行 JSON 对象输出。'
           )
         },
         { timeout: layoutBudget }
       );
       layoutRaw = (r && r.text) || '';
+      layoutUsage = (r && r.usage) || null;
       layoutMs = Date.now() - tLayout;
-      console.log('[recognizeTimetable] 版式分析耗时', layoutMs, 'ms, len=', layoutRaw.length);
+      console.log(
+        '[recognizeTimetable] 版式分析耗时', layoutMs, 'ms, len=', layoutRaw.length,
+        'usage=', JSON.stringify(layoutUsage)
+      );
     } catch (e) {
       layoutMs = Date.now() - tLayout;
       layoutError = String((e && (e.message || e.errMsg)) || e).slice(0, 200);
@@ -371,10 +388,13 @@ exports.main = async (event) => {
     // 只回传文本，JSON 解析与 Schema 校验统一放在客户端管线里做
     const raw = (result && result.text) || '';
     const modelMs = Date.now() - tModel;
+    const extractUsage = (result && result.usage) || null;
     console.log(
       '[recognizeTimetable] 提取耗时', modelMs, 'ms, rawLen=', raw.length,
       'model=', visionModel, 'layout=', wantLayout ? (layoutRaw ? 'ok' : 'failed') : 'skipped',
-      'extractBudget=', extractBudget
+      'extractBudget=', extractBudget,
+      'extractUsage=', JSON.stringify(extractUsage),
+      'promptLen=', buildExtractPrompt(layoutRaw).length
     );
     if (!raw) return fail('EMPTY_RESULT', '模型没有返回内容，请换一张更清晰的图片');
 
@@ -383,7 +403,9 @@ exports.main = async (event) => {
       raw,
       layout: layoutRaw,          // 版式规则原始文本，客户端可解析后展示
       model: visionModel,
-      usage: (result && result.usage) || null,
+      usage: extractUsage,
+      usageLayout: layoutUsage,
+      promptChars: buildExtractPrompt(layoutRaw).length,
       imageBytes: image.bytes,
       ms: { download: downloadMs, layout: layoutMs, model: modelMs, total: Date.now() - tDownload },
       layoutError: layoutError || undefined,
