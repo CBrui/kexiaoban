@@ -991,6 +991,36 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('兼容：批量识别字段完整', aliasList.list[0].missing_fields.length, 0);
   eq('兼容：title/room 别名生效', aliasList.list[1].location, 'B203');
 
+  // —— 场景 F：真实图片识别耗时 45s+，失败时要能定位到原因 ——
+  // 用户实测反馈「拍照导入显示 AI 服务暂时不可用」，但客户端此前只打
+  // code + message，把云函数回传的 detail/code 丢了，导致无从排查。
+  // 这里锁住「服务端失败必须把诊断信息透出，且不能污染错误码本身」。
+  const modelErr = await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async () => ({
+      ok: false, error: 'MODEL_ERROR', message: '图片识别服务暂时不可用',
+      detail: 'request timeout', code: 'ESOCKETTIMEDOUT', ms: 15077
+    })
+  });
+  eq('诊断：服务端失败仍映射为 MODEL_ERROR', modelErr.code, 'MODEL_ERROR');
+  eq('诊断：透出服务端 detail', modelErr.serverDetail, 'request timeout');
+  eq('诊断：透出服务端 code', modelErr.serverCode, 'ESOCKETTIMEDOUT');
+  ok('诊断：错误码不被附加字段覆盖', modelErr.code === 'MODEL_ERROR');
+
+  // 调用器直接抛错（客户端先断开）时，超时给专门的错误码与文案
+  const timeoutErr = await aiApi.parseCoursesFromImage('local.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async () => { throw { errMsg: 'cloud.callFunction:fail timeout' }; }
+  });
+  eq('诊断：超时映射为 MODEL_TIMEOUT', timeoutErr.code, 'MODEL_TIMEOUT');
+  ok('诊断：超时有独立文案', aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_TIMEOUT).indexOf('超时') >= 0);
+
+  // —— 场景 G：周次写成「第1-16周」（截图里的常见写法）——
+  eq('周次兼容：「第1-16周」可解析', parseWeeks('第1-16周').length, 16);
+  eq('周次兼容：「第3-5周」可解析', parseWeeks('第3-5周').join(','), '3,4,5');
+  eq('周次兼容：「第1-16周单周」仍识别单周',
+    parseWeeks('第1-16周单周').join(','), '1,3,5,7,9,11,13,15');
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);

@@ -26,22 +26,38 @@
  */
 const cloud = require('wx-server-sdk');
 
-// AI 请求默认超时只有 15 秒 —— 视觉模型读一张课表往往要 20~60 秒，
-// 实测 15 秒必然 ESOCKETTIMEDOUT。t1-vision 属深度思考系列，实测单张课表
-// 超过 60 秒，因此这里给到 280 秒（云函数本身设 300 秒，留 20 秒给下载与收尾）。
+// AI 请求默认超时只有 15 秒 —— 视觉模型读一张课表要几十秒，15 秒必然
+// ESOCKETTIMEDOUT。这里放宽到 50 秒：真正的天花板不是云函数（可设 300 秒），
+// 而是**客户端 wx.cloud.callFunction 的 60 秒硬上限**（官方明确：该接口对云
+// 函数超时的限制上限为 60 秒，控制台调大也突破不了，超时报
+// -501002 / ESOCKETTIMEDOUT）。因此服务端计算必须留在 60 秒内，
+// 给到 50 秒留 10 秒给下载与回传。
 // 注意：wx-server-sdk 需 4.0.1+ 才有 cloud.ai()。
-const AI_TIMEOUT = 280000;
+const AI_TIMEOUT = 50000;
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV, timeout: AI_TIMEOUT });
 
 const ai = cloud.ai();
 
-// 视觉模型：hunyuan-t1-vision 是专用多模态理解模型（OpenAI 兼容的 image_url 结构），
-// 优点：格式兼容、输入便宜；缺点：t1 是深度思考系列，一张课表要 60 秒以上。
-// 已实测排除的替代：hunyuan-turbos-vision-video-20250728 对这种 messages 结构返回 400
-// （它是 video_url 优先的视频模型，图片走不同参数），因此仍用 t1-vision。
-// 模型需先在环境里启用（DescribeAIModels → UpdateAIModel，见 README 部署步骤）。
-const VISION_MODEL = 'hunyuan-t1-vision-20250916';
 const MODEL_GROUP = 'cloudbase';
+
+/**
+ * 视觉模型选择 —— 这是踩过坑的关键决策：
+ *
+ * 候选（CloudBase 可用模型列表 https://docs.cloudbase.net/ai/available-models）：
+ *   hy-vision-2.0-instruct      图生文 ·「快思考」  ← 现在用这个
+ *   hunyuan-t1-vision-20250916  图生文 ·「深度思考」
+ *   hunyuan-turbos-vision-video-20250728  视频理解（图片 messages 会 400）
+ *
+ * 为什么弃用 t1-vision：它是深度思考（thinking）模型，实测单张课表要 44~60 秒，
+ * 直接顶到 callFunction 的 60 秒硬上限。用户实测表现就是「AI 服务暂时不可用」
+ * （客户端先超时断开，catch 到后被归一化成 MODEL_ERROR）。
+ * hy-vision-2.0-instruct 是官方标注的「快思考」图生文模型，同为 ¥3/¥9 每百万
+ * token，速度显著更快，才是这个场景正确的基础模型。
+ *
+ * 可用 event.model 临时指定模型做 A/B 对比，不传则用默认值。
+ */
+const DEFAULT_VISION_MODEL = 'hy-vision-2.0-instruct';
+const FALLBACK_VISION_MODEL = 'hunyuan-t1-vision-20250916';
 
 // 单张图片大小上限（字节）：超过直接拒绝，避免把超大图喂给模型浪费额度
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -125,6 +141,10 @@ exports.main = async (event) => {
   const { OPENID } = cloud.getWXContext();
   if (!OPENID) return fail('NO_IDENTITY', '未取得调用者身份');
 
+  // 允许调用方指定模型（A/B 对比或应急切换），不传走默认快模型
+  const visionModel =
+    (event && event.model) || DEFAULT_VISION_MODEL;
+
   // 探活模式：只做一次纯文本模型调用，用于确认模型通道是否可用
   if (event && event.probe === true) {
     const t0 = Date.now();
@@ -132,7 +152,7 @@ exports.main = async (event) => {
       const model = ai.createModel(MODEL_GROUP);
       const r = await model.generateText(
         {
-          model: VISION_MODEL,
+          model: event.probeModel || visionModel,
           messages: [{ role: 'user', content: '回复两个字：正常' }]
         },
         { timeout: AI_TIMEOUT }
@@ -140,12 +160,14 @@ exports.main = async (event) => {
       return {
         ok: true,
         probe: true,
+        model: event.probeModel || visionModel,
         ms: Date.now() - t0,
         text: (r && r.text) || '',
         usage: (r && r.usage) || null
       };
     } catch (e) {
       return fail('PROBE_FAILED', '模型探活失败', {
+        model: event.probeModel || visionModel,
         ms: Date.now() - t0,
         detail: String((e && (e.message || e.errMsg)) || e).slice(0, 300),
         code: String((e && (e.code || e.errCode)) || '')
@@ -174,7 +196,7 @@ exports.main = async (event) => {
     const model = ai.createModel(MODEL_GROUP);
     const result = await model.generateText(
       {
-        model: VISION_MODEL,
+        model: visionModel,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           {
@@ -194,15 +216,17 @@ exports.main = async (event) => {
 
     // 只回传文本，JSON 解析与 Schema 校验统一放在客户端管线里做
     const raw = (result && result.text) || '';
-    console.log('[recognizeTimetable] 模型耗时', Date.now() - tModel, 'ms, rawLen=', raw.length);
+    const modelMs = Date.now() - tModel;
+    console.log('[recognizeTimetable] 模型耗时', modelMs, 'ms, rawLen=', raw.length, 'model=', visionModel);
     if (!raw) return fail('EMPTY_RESULT', '模型没有返回内容，请换一张更清晰的图片');
 
     return {
       ok: true,
       raw,
+      model: visionModel,
       usage: (result && result.usage) || null,
       imageBytes: image.bytes,
-      ms: { download: tModel - tDownload, model: Date.now() - tModel }
+      ms: { download: tModel - tDownload, model: modelMs, total: Date.now() - tDownload }
     };
   } catch (e) {
     console.error('[recognizeTimetable] 模型调用失败', e);
@@ -212,6 +236,7 @@ exports.main = async (event) => {
     return fail('MODEL_ERROR', '图片识别服务暂时不可用，可以改用手工录入', {
       detail,
       code: String(code),
+      model: visionModel,
       ms: Date.now() - tModel
     });
   }

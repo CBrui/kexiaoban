@@ -43,6 +43,7 @@ Page({
     imagePath: '',           // 已选图片的本地临时路径（用于预览）
     recognizing: false,      // 图片识别中
     imageHint: '',           // 识别进度提示
+    imageElapsed: 0,         // 识别已耗时（秒），用于可视化等待
     imageError: '',          // 识别错误提示
 
     // missing_fields 里的字段名 → 中文标签（WXML 里直接索引取用）
@@ -64,6 +65,14 @@ Page({
   onShow() {
     // 从节次设置页返回时，总大节数可能已变化，需刷新节次选项
     this.refreshSlotOptions();
+  },
+
+  onUnload() {
+    // 识别计时器必须随页面销毁清掉，否则页面已卸载定时器还在 setData
+    if (this._recognizeTimer) {
+      clearInterval(this._recognizeTimer);
+      this._recognizeTimer = null;
+    }
   },
 
   refreshSlotOptions() {
@@ -204,8 +213,18 @@ Page({
       recognizing: true,
       imageError: '',
       imageHint: '正在压缩并上传图片…',
+      imageElapsed: 0,
       parsed: []
     });
+
+    // 视觉模型读一张课表要 45 秒上下，期间若界面一动不动，用户会当成卡死并
+    // 提前退出（真机一旦切后台，callFunction 就会被断开并报错）。用秒表把
+    // 等待可视化，让用户知道「还在跑」。
+    const tickStart = Date.now();
+    this._recognizeTimer = setInterval(() => {
+      if (!this.data.recognizing) return;
+      this.setData({ imageElapsed: Math.round((Date.now() - tickStart) / 1000) });
+    }, 1000);
 
     try {
       const res = await aiApi.parseCoursesFromImage(filePath, {
@@ -227,7 +246,11 @@ Page({
       console.error('[build] 图片识别失败', e);
       this.setData({ imageError: aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_ERROR) });
     } finally {
-      this.setData({ recognizing: false, imageHint: '' });
+      if (this._recognizeTimer) {
+        clearInterval(this._recognizeTimer);
+        this._recognizeTimer = null;
+      }
+      this.setData({ recognizing: false, imageHint: '', imageElapsed: 0 });
     }
   },
 

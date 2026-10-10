@@ -287,7 +287,8 @@ const PARSE_ERROR = {
   // 图片识别专属
   NO_FILE: 'NO_FILE',
   UPLOAD_FAILED: 'UPLOAD_FAILED',
-  IMAGE_TOO_LARGE: 'IMAGE_TOO_LARGE'
+  IMAGE_TOO_LARGE: 'IMAGE_TOO_LARGE',
+  MODEL_TIMEOUT: 'MODEL_TIMEOUT'
 };
 
 /**
@@ -312,6 +313,8 @@ function messageOf(code) {
       return '图片上传失败，请检查网络后重试';
     case PARSE_ERROR.IMAGE_TOO_LARGE:
       return '图片过大，请换一张更小或更清晰的图片';
+    case PARSE_ERROR.MODEL_TIMEOUT:
+      return '识别超时了，请保持小程序在前台并重试';
     default:
       return '解析失败，可以改用下面的手工录入';
   }
@@ -403,8 +406,13 @@ function safeTotalSlots() {
   }
 }
 
-function fail(code) {
-  return { ok: false, list: [], code, message: messageOf(code) };
+function fail(code, extra) {
+  // extra：可选的诊断附加信息（detail / code 等），供调用方打日志或做更细的
+  // 分支处理。不参与用户可见文案，避免把服务端技术细节抖到界面上。
+  return Object.assign(
+    { ok: false, list: [], code, message: messageOf(code) },
+    extra || {}
+  );
 }
 
 /* ================= 图片识别入口（P2） ================= */
@@ -554,18 +562,56 @@ async function parseCoursesFromImage(filePath, options = {}) {
     // 3) 调云函数（服务端调视觉模型）
     report('正在识别课表…');
     let res;
+    const tCall = Date.now();
     try {
       res = await cloudCall(fileID);
     } catch (e) {
-      console.error('[ai] 云函数调用失败', e);
+      // 走到这里通常是「客户端先断开」：视觉模型单张课表要 45 秒以上，
+      // 若用户切后台、息屏或网络抖动，callFunction 会先抛错，而云函数其实
+      // 还在跑。把完整的 errMsg / errCode 打出来，否则现场只剩一句
+      // 「AI 服务暂时不可用」，无从判断是超时、断网还是权限问题。
+      const errMsg = String((e && (e.errMsg || e.message)) || e);
+      const errCode = String((e && (e.errCode || e.code)) || '');
+      console.error('[ai] 云函数调用失败', {
+        errCode,
+        errMsg,
+        ms: Date.now() - tCall,
+        fileID
+      });
+      // 超时/中断单独给文案，提示用户重试而不是以为功能坏了
+      if (/timeout|timed?\s*out|ESOCKETTIMEDOUT|INTERRUPT/i.test(errMsg + errCode)) {
+        return fail(PARSE_ERROR.MODEL_TIMEOUT);
+      }
       return fail(PARSE_ERROR.MODEL_ERROR);
     }
 
     if (!res || res.ok !== true) {
       const code = (res && res.error) || '';
-      console.warn('[ai] 识别服务返回失败', code, res && res.message);
+      // 关键：服务端 catch 已回传 detail / code / ms，这里必须一起打出来。
+      // 之前只打 code + message，排查时 console 里看不到真实原因（如模型
+      // 403、格式 400、超时），等于把最有价值的一行日志丢了。
+      console.warn('[ai] 识别服务返回失败', {
+        code,
+        message: res && res.message,
+        detail: res && res.detail,
+        serverCode: res && res.code,
+        serverMs: res && res.ms
+      });
       if (code === 'TOO_LARGE') return fail(PARSE_ERROR.IMAGE_TOO_LARGE);
-      return fail(PARSE_ERROR.MODEL_ERROR);
+      if (code === 'MODEL_ERROR') {
+        // 服务端把模型层的真实错误放在了 detail，带上便于快速定位。
+        // 注意用 serverDetail/serverCode 而非 detail/code —— fail() 内部已有
+        // code 字段（错误码本身），同名会被覆盖掉。
+        return fail(PARSE_ERROR.MODEL_ERROR, {
+          serverDetail: (res && res.detail) || '',
+          serverCode: (res && res.code) || ''
+        });
+      }
+      // EMPTY_FILE / DOWNLOAD_FAILED / EMPTY_RESULT 等给更具指向性的文案
+      return fail(PARSE_ERROR.MODEL_ERROR, {
+        serverDetail: (res && (res.message || res.error)) || '',
+        serverCode: code
+      });
     }
 
     // 4) 复用与文本解析完全相同的抽取 + 校验逻辑
@@ -600,9 +646,12 @@ function defaultCallFunction(fileID) {
   return wx.cloud.callFunction({
     name: 'recognizeTimetable',
     data: { fileID },
-    // 视觉模型是慢速操作（t1-vision 单张课表 >60s），必须把客户端等待上限
-    // 一起放大，否则云函数据还没算完，客户端先按默认超时（约 15s）断开了。
-    config: { timeout: 290000 }
+    // 注意：callFunction 的客户端等待有 **60 秒硬上限**（微信官方明确该接口
+    // 对云函数超时的限制上限为 60 秒，控制台把云函数调到 300 秒也突破不了，
+    // 超时报 -501002 / ESOCKETTIMEDOUT）。所以这里设 55000 只是「尽量用满」，
+    // 写更大没有意义。真正让识别稳定的是服务端换了快思考模型
+    // （hy-vision-2.0-instruct 实测 ~6 秒，旧 t1-vision 要 45 秒以上）。
+    config: { timeout: 55000 }
   }).then((r) => (r && r.result) || null);
 }
 

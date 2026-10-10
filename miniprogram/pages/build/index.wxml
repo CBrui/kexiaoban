@@ -118,7 +118,9 @@
         </view>
       </view>
 
-      <view wx:if="{{recognizing}}" class="stream-hint">{{imageHint}}</view>
+      <view wx:if="{{recognizing}}" class="stream-hint">
+        {{imageHint}}<text wx:if="{{imageElapsed > 3}}"> 已等待 {{imageElapsed}} 秒，识别较慢请勿退出</text>
+      </view>
       <view wx:if="{{imageError}}" class="parse-error">{{imageError}}</view>
 
       <view class="ai-notice">

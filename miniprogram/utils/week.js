@@ -28,7 +28,9 @@ function parseWeeks(text) {
   const isEven = /双/.test(text);
 
   // 去掉「单双周」字样及其「周」后缀，只留数字区间部分
-  const body = text.replace(/(单|双)周?/g, '').replace(/周/g, '').trim();
+  // 「第」也一并去掉：课表截图里常写成「第1-16周」，模型会原样搬过来，
+  // 不去掉的话下面的区间正则匹配不上，整条周次会被判为无效。
+  const body = text.replace(/(单|双)周?/g, '').replace(/周/g, '').replace(/第/g, '').trim();
   if (!body) return [];
 
   const result = new Set();
