@@ -2,32 +2,6 @@
 
   <!-- 输入区 -->
   <view class="card">
-    <view class="section-title">选择要一起比对的同学</view>
-
-    <!-- 已绑定同学多选（按分组展示，长按可分组/删除） -->
-    <block wx:if="{{friendChips.length}}">
-      <view class="friend-group" wx:for="{{friendGroups}}" wx:for-item="grp" wx:key="name">
-        <text class="group-label">{{grp.name || '未分组'}}</text>
-        <view class="friend-chips">
-          <view
-            class="chip {{item.selected ? 'chip-on' : ''}}"
-            wx:for="{{grp.chips}}"
-            wx:for-item="item"
-            wx:key="owner_id"
-            data-idx="{{item.idx}}"
-            bindtap="onToggleFriend"
-            bindlongpress="onLongPressFriend"
-            hover-class="chip-hover"
-          >
-            <text>{{item.nickname}}</text>
-          </view>
-        </view>
-      </view>
-    </block>
-    <view wx:else class="chips-empty">
-      <text>还没有绑定的同学，输入对方邀请码即可添加</text>
-    </view>
-
     <view class="code-row">
       <input
         class="code-input"
@@ -54,6 +28,37 @@
       </view>
     </view>
     <text class="hint">起床/就寝节次用于裁掉你不参与的时段；「空闲」按全员都空计算</text>
+  </view>
+
+  <!-- 我的同学：分组折叠在下方，点组头整组全选，展开后逐个单选 -->
+  <view class="card">
+    <view class="section-title">选择要一起比对的同学</view>
+    <block wx:if="{{friendChips.length}}">
+      <view class="friend-group" wx:for="{{friendGroups}}" wx:for-item="grp" wx:for-index="gi" wx:key="name">
+        <view class="group-head" bindtap="onToggleGroupAll" data-gi="{{gi}}">
+          <view class="group-arrow" catchtap="onToggleGroupExpand" data-gi="{{gi}}">{{grp.collapsed ? '▸' : '▾'}}</view>
+          <text class="group-name">{{grp.name || '未分组'}}</text>
+          <text class="group-count">{{grp.selectedCount}}/{{grp.chips.length}}</text>
+        </view>
+        <view wx:if="{{!grp.collapsed}}" class="friend-chips">
+          <view
+            class="chip {{item.selected ? 'chip-on' : ''}}"
+            wx:for="{{grp.chips}}"
+            wx:for-item="item"
+            wx:key="owner_id"
+            data-idx="{{item.idx}}"
+            bindtap="onToggleFriend"
+            bindlongpress="onLongPressFriend"
+            hover-class="chip-hover"
+          >
+            <text>{{item.nickname}}</text>
+          </view>
+        </view>
+      </view>
+    </block>
+    <view wx:else class="chips-empty">
+      <text>还没有绑定的同学，输入对方邀请码即可添加</text>
+    </view>
   </view>
 
   <!-- 兜底提示 -->

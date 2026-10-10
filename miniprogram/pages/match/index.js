@@ -110,8 +110,10 @@ Page({
   /**
    * 把扁平的同学列表按分组拆成渲染视图。
    * 未分组（group 为空）归入 name='' 的组，界面显示为「未分组」。
+   * 每组带 collapsed（默认折叠）与 selectedCount（已选数），折叠态由 this._collapsed 记忆。
    */
   buildFriendGroups(chips) {
+    const collapsed = this._collapsed || {};
     const order = [];
     const map = {};
     chips.forEach((c, idx) => {
@@ -119,7 +121,15 @@ Page({
       if (!map[key]) { map[key] = []; order.push(key); }
       map[key].push(Object.assign({}, c, { idx }));
     });
-    return order.map((key) => ({ name: key, chips: map[key] }));
+    return order.map((key) => {
+      const groupChips = map[key];
+      return {
+        name: key,
+        collapsed: collapsed[key] !== undefined ? collapsed[key] : true,
+        chips: groupChips,
+        selectedCount: groupChips.filter((c) => c.selected).length
+      };
+    });
   },
 
   /** 现有分组名（去重、保持出现顺序） */
@@ -151,6 +161,33 @@ Page({
       friendGroups: this.buildFriendGroups(chips),
       selectedCount: chips.filter((c) => c.selected).length
     });
+  },
+
+  /** 点击分组头：整组全选 / 全不选 */
+  onToggleGroupAll(e) {
+    const gi = Number(e.currentTarget.dataset.gi);
+    const grp = this.data.friendGroups[gi];
+    if (!grp) return;
+    const target = !grp.chips.every((c) => c.selected);
+    const chips = this.data.friendChips.slice();
+    grp.chips.forEach((c) => {
+      chips[c.idx] = Object.assign({}, chips[c.idx], { selected: target });
+    });
+    this.setData({
+      friendChips: chips,
+      friendGroups: this.buildFriendGroups(chips),
+      selectedCount: chips.filter((c) => c.selected).length
+    });
+  },
+
+  /** 展开 / 折叠某个分组 */
+  onToggleGroupExpand(e) {
+    const gi = Number(e.currentTarget.dataset.gi);
+    const grp = this.data.friendGroups[gi];
+    if (!grp) return;
+    this._collapsed = this._collapsed || {};
+    this._collapsed[grp.name] = !grp.collapsed;
+    this.setData({ friendGroups: this.buildFriendGroups(this.data.friendChips) });
   },
 
   onInputCode(e) {

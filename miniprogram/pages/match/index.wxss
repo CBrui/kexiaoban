@@ -281,23 +281,43 @@
   margin-bottom: 8rpx;
 }
 
-/* ---------- 好友多选（按分组） ---------- */
+/* ---------- 好友多选（按分组折叠） ---------- */
 .friend-group {
   margin-bottom: 20rpx;
 }
 
-.group-label {
-  display: block;
+.group-head {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 8rpx;
+  border-bottom: 1rpx solid var(--color-border);
+}
+
+.group-arrow {
+  width: 44rpx;
+  font-size: 28rpx;
+  color: var(--color-text-secondary);
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.group-name {
+  flex: 1;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.group-count {
   font-size: 22rpx;
   color: var(--color-text-tertiary);
-  margin: 4rpx 0 12rpx;
 }
 
 .friend-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 16rpx;
-  margin: 8rpx 0 24rpx;
+  margin: 12rpx 0 8rpx;
 }
 
 .chip {
