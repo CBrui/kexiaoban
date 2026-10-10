@@ -313,6 +313,25 @@
   color: var(--color-text-tertiary);
 }
 
+/* 组头选中高亮：整组全选时蓝底蓝字；部分选中时计数变蓝 */
+.group-head-on {
+  background: var(--color-primary-soft);
+  border-radius: 12rpx;
+}
+
+.group-head-on .group-name {
+  color: var(--color-primary);
+}
+
+.group-head-on .group-arrow {
+  color: var(--color-primary);
+}
+
+.group-count-on {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
 .friend-chips {
   display: flex;
   flex-wrap: wrap;

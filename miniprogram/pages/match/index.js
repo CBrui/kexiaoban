@@ -123,11 +123,14 @@ Page({
     });
     return order.map((key) => {
       const groupChips = map[key];
+      const selectedCount = groupChips.filter((c) => c.selected).length;
       return {
         name: key,
         collapsed: collapsed[key] !== undefined ? collapsed[key] : true,
         chips: groupChips,
-        selectedCount: groupChips.filter((c) => c.selected).length
+        selectedCount,
+        // 整组全选（且非空组）→ 组头高亮；部分选中 → 计数文字变蓝
+        allSelected: groupChips.length > 0 && selectedCount === groupChips.length
       };
     });
   },

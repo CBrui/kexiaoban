@@ -35,10 +35,10 @@
     <view class="section-title">选择要一起比对的同学</view>
     <block wx:if="{{friendChips.length}}">
       <view class="friend-group" wx:for="{{friendGroups}}" wx:for-item="grp" wx:for-index="gi" wx:key="name">
-        <view class="group-head" bindtap="onToggleGroupAll" data-gi="{{gi}}">
+        <view class="group-head {{grp.allSelected ? 'group-head-on' : ''}}" bindtap="onToggleGroupAll" data-gi="{{gi}}">
           <view class="group-arrow" catchtap="onToggleGroupExpand" data-gi="{{gi}}">{{grp.collapsed ? '▸' : '▾'}}</view>
           <text class="group-name">{{grp.name || '未分组'}}</text>
-          <text class="group-count">{{grp.selectedCount}}/{{grp.chips.length}}</text>
+          <text class="group-count {{grp.selectedCount > 0 ? 'group-count-on' : ''}}">{{grp.selectedCount}}/{{grp.chips.length}}</text>
         </view>
         <view wx:if="{{!grp.collapsed}}" class="friend-chips">
           <view
