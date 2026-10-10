@@ -27,7 +27,8 @@ const {
 } = require('../../logic/free-align');
 const { listCourses, fetchFriendCourses } = require('../../api/course');
 const {
-  findByInviteCode, bindFriend, listFriendProfiles
+  findByInviteCode, bindFriend, listFriendProfiles,
+  updateFriendGroup, removeFriend
 } = require('../../api/profile');
 const schedule = require('../../utils/schedule');
 
@@ -41,10 +42,9 @@ Page({
   data: {
     inviteCode: '',
     loading: false,
-    friendChips: [],     // [{owner_id, nickname, avatar_url, selected}]
+    friendChips: [],     // [{owner_id, nickname, avatar_url, group, selected}]
+    friendGroups: [],    // [{name, chips:[{...chip, idx}]}] 分组渲染视图
     selectedCount: 0,
-    result: [],          // [{week, slots:[{dayLabel, from, to}]}]
-    resultCount: 0,
     tip: '',
     tipType: '',         // empty | none | error
     searched: false,
@@ -95,12 +95,41 @@ Page({
           owner_id: f.owner_id,
           nickname: f.nickname || this.shortId(f.owner_id),
           avatar_url: f.avatar_url || '',
+          group: f.group || '',
           selected: false
         }));
-      this.setData({ friendChips });
+      this.setData({
+        friendChips,
+        friendGroups: this.buildFriendGroups(friendChips)
+      });
     } catch (e) {
       console.error('[match] 加载同学列表失败', e);
     }
+  },
+
+  /**
+   * 把扁平的同学列表按分组拆成渲染视图。
+   * 未分组（group 为空）归入 name='' 的组，界面显示为「未分组」。
+   */
+  buildFriendGroups(chips) {
+    const order = [];
+    const map = {};
+    chips.forEach((c, idx) => {
+      const key = (c.group && String(c.group).trim()) || '';
+      if (!map[key]) { map[key] = []; order.push(key); }
+      map[key].push(Object.assign({}, c, { idx }));
+    });
+    return order.map((key) => ({ name: key, chips: map[key] }));
+  },
+
+  /** 现有分组名（去重、保持出现顺序） */
+  existingGroups() {
+    const set = [];
+    this.data.friendChips.forEach((c) => {
+      const g = (c.group && String(c.group).trim()) || '';
+      if (g && set.indexOf(g) < 0) set.push(g);
+    });
+    return set;
   },
 
   /** 昵称缺失时的兜底显示：同学 + 身份尾号 */
@@ -125,6 +154,76 @@ Page({
     this.setData({ inviteCode: e.detail.value.toUpperCase() });
   },
 
+  /* ---------- 长按同学：分组 / 删除 ---------- */
+  onLongPressFriend(e) {
+    const idx = Number(e.currentTarget.dataset.idx);
+    const chip = this.data.friendChips[idx];
+    if (!chip) return;
+    this._pressIdx = idx;
+
+    const groups = this.existingGroups();
+    // wx.showActionSheet 最多 6 项，分组超出时截断（仍可「新建分组」）
+    const itemList = groups.slice(0, 4).concat(['新建分组', '删除']);
+    wx.showActionSheet({
+      itemList,
+      success: (res) => this.onFriendAction(res.tapIndex, groups)
+    });
+  },
+
+  async onFriendAction(tapIndex, groups) {
+    const chip = this.data.friendChips[this._pressIdx];
+    if (!chip) return;
+
+    if (tapIndex < groups.length) {
+      // 选择已有分组
+      await this.applyFriendGroup(chip.owner_id, groups[tapIndex]);
+    } else if (tapIndex === groups.length) {
+      // 新建分组：弹输入框
+      wx.showModal({
+        title: '新建分组',
+        editable: true,
+        placeholderText: '输入分组名称',
+        success: async (r) => {
+          if (r.confirm && r.content) {
+            await this.applyFriendGroup(chip.owner_id, r.content.trim());
+          }
+        }
+      });
+    } else {
+      // 删除
+      wx.showModal({
+        title: '删除同学',
+        content: `确定删除「${chip.nickname}」吗？删除后需重新用邀请码添加。`,
+        confirmColor: '#f53f3f',
+        success: async (r) => {
+          if (r.confirm) await this.applyRemoveFriend(chip.owner_id);
+        }
+      });
+    }
+  },
+
+  async applyFriendGroup(ownerId, group) {
+    try {
+      await updateFriendGroup(ownerId, group);
+      wx.showToast({ title: '已设置分组', icon: 'success' });
+      await this.loadFriends();
+    } catch (e) {
+      console.error('[match] 设置分组失败', e);
+      wx.showToast({ title: '设置失败，请重试', icon: 'none' });
+    }
+  },
+
+  async applyRemoveFriend(ownerId) {
+    try {
+      await removeFriend(ownerId);
+      wx.showToast({ title: '已删除', icon: 'success' });
+      await this.loadFriends();
+    } catch (e) {
+      console.error('[match] 删除同学失败', e);
+      wx.showToast({ title: '删除失败，请重试', icon: 'none' });
+    }
+  },
+
   onPickWake(e) {
     this.setData({ wakeSlot: Number(e.detail.value) + 1 });
   },
@@ -144,7 +243,7 @@ Page({
 
     this.setData({
       loading: true, tip: '', tipType: '',
-      result: [], hasGrid: false, gridRows: [], skippedNote: '', searched: true
+      hasGrid: false, gridRows: [], skippedNote: '', searched: true
     });
 
     try {
@@ -290,18 +389,7 @@ Page({
         return;
       }
 
-      // 6. 格式化输出：空闲时段明细
-      const result = freeList.map((item) => ({
-        week: item.week,
-        slots: item.slots.map((s) => ({
-          dayLabel: DAY_LABELS[s.day - 1],
-          from: s.from,
-          to: s.to,
-          text: s.from === s.to ? `第 ${s.from} 节` : `第 ${s.from}-${s.to} 节`
-        }))
-      }));
-
-      // 7. 渲染网格：默认显示第一个周次
+      // 6. 渲染网格：默认显示第一个周次（空闲时段明细已移除，只保留网格）
       this._gridRes = gridRes;
       const freeSegments = freeList.reduce((n, w) => n + w.slots.length, 0);
       const weekIdx = 0;
@@ -309,8 +397,6 @@ Page({
       const names = valid.map((v) => v.nickname || this.shortId(v.owner_id));
 
       this.setData({
-        result,
-        resultCount: result.length,
         freeSegments,
         hasGrid: gridRes.weeks.length > 0,
         gridMode: isDuo ? 'duo' : 'multi',

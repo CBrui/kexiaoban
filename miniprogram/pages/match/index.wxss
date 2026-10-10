@@ -254,6 +254,8 @@
 .cell-mine .mg-cell-label { color: #3a7afe; }
 .cell-theirs { background: #fff4e5; }
 .cell-theirs .mg-cell-label { color: #b97a1f; }
+.cell-partial { background: #eaf1ff; }
+.cell-partial .mg-cell-label { color: #3a7afe; }
 .cell-out { background: transparent; }
 
 .mg-break {
@@ -279,7 +281,18 @@
   margin-bottom: 8rpx;
 }
 
-/* ---------- 好友多选 ---------- */
+/* ---------- 好友多选（按分组） ---------- */
+.friend-group {
+  margin-bottom: 20rpx;
+}
+
+.group-label {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-text-tertiary);
+  margin: 4rpx 0 12rpx;
+}
+
 .friend-chips {
   display: flex;
   flex-wrap: wrap;

@@ -5,7 +5,7 @@
  * 注意：云环境 ID 通过 config.js 注入，不要提交到公开仓库。
  */
 const { initClient } = require('./api/client');
-const { ensureProfile } = require('./api/profile');
+const { ensureProfile, cleanupUngroupedFriends } = require('./api/profile');
 const { CLOUD_ENV_ID, USE_CLOUD } = require('./config');
 
 App({
@@ -42,6 +42,13 @@ App({
   async checkLogin() {
     try {
       await this.loginIdentity();
+      // 登录成功后清理「未分组」的同学（产品约定：未分组的同学下次登录时删除）。
+      // 失败不阻断登录，仅告警。
+      try {
+        await cleanupUngroupedFriends();
+      } catch (e) {
+        console.warn('[app] 清理未分组同学失败（不影响登录）', e);
+      }
     } catch (err) {
       console.error('[app] 登录失败', err);
       // 登录失败不阻断页面渲染，由页面给出重试入口

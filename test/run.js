@@ -1376,6 +1376,31 @@ const storeApi = require(path.join(M, 'api/store'));
   ok('登录失败时不再写入 user（避免用错误身份继续跑）',
     appObj.globalData.user === null || appObj.globalData.user === undefined);
 
+  /* ============ 46. 同学分组 / 删除（本地模式） ============ */
+  // 找搭子新增：长按同学可设置分组或删除；未分组的同学下次登录清理。
+  // 这里覆盖 updateFriendGroup / removeFriend 的本地落库行为。
+  group('【46】同学分组与删除 updateFriendGroup / removeFriend（本地模式）');
+
+  clientApi.initClient({ useCloud: false });
+  eq('客户端已切回本地模式', clientApi.getMode(), 'local');
+
+  await storeApi.insert('relations', { owner_id: 'oME', friend_owner_id: 'oGRP', friend_nickname: '小明' });
+
+  const upd = await profileApi.updateFriendGroup('oGRP', '室友');
+  eq('设置分组后返回 group=室友', upd.group, '室友');
+  const relsAfter = await storeApi.select('relations', { friend_owner_id: 'oGRP' });
+  eq('分组已落库', relsAfter[0].group, '室友');
+
+  eq('清空分组（空串）→ group=""',
+    (await profileApi.updateFriendGroup('oGRP', '')).group, '');
+  eq('不存在的关系 → 返回 null', await profileApi.updateFriendGroup('oNOPE', 'x'), null);
+
+  eq('删除存在的同学 → true', await profileApi.removeFriend('oGRP'), true);
+  eq('删除后查不到', (await storeApi.select('relations', { friend_owner_id: 'oGRP' })).length, 0);
+  eq('删除不存在的关系 → false', await profileApi.removeFriend('oNOPE'), false);
+
+  eq('本地模式清理未分组返回 0（该语义只在云端）', await profileApi.cleanupUngroupedFriends(), 0);
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);

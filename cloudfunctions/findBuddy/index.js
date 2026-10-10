@@ -20,7 +20,8 @@
  * 动作（event.action）：
  *   - `findProfile`：{ inviteCode } → { ok, profile|null }
  *   - `getCourses` ：{ friendOwnerId } → { ok, courses, hasTimetable, staleBinding }
- *   - `listFriends`：→ { ok, friends:[{owner_id, nickname, avatar_url, ...}] }
+ *   - `listFriends`：→ { ok, friends:[{owner_id, nickname, avatar_url, group, ...}] }
+ *   - `cleanupFriends`：→ { ok, removed }   删除调用者「未分组」的关系
  */
 const cloud = require('wx-server-sdk');
 
@@ -202,10 +203,33 @@ async function listFriends(openid) {
       avatar_url: doc.avatar_url || rel.friend_avatar_url || '',
       college: doc.college || '',
       major: doc.major || '',
-      class_name: doc.class_name || ''
+      class_name: doc.class_name || '',
+      // 分组（未分组为空串，客户端据此分组渲染 / 清理）
+      group: rel.group || ''
     };
   });
   return ok({ friends });
+}
+
+/**
+ * 清理「未分组」的同学（产品约定：未分组的同学下次登录时删除）。
+ * 只删调用者自己的关系（以平台写入的 _openid 判定），且仅删 group 缺失/为空串的。
+ */
+async function cleanupFriends(openid) {
+  const _ = db.command;
+  const res = await db.collection(RELATIONS)
+    .where(_.or([{ _openid: openid }, { owner_id: openid }]))
+    .get();
+
+  const toRemove = (res.data || []).filter((r) => !r.group);
+  for (const r of toRemove) {
+    try {
+      await db.collection(RELATIONS).doc(r._id).remove();
+    } catch (e) {
+      console.warn('[findBuddy] 清理未分组关系失败', r._id, e);
+    }
+  }
+  return ok({ removed: toRemove.length });
 }
 
 exports.main = async (event) => {
@@ -217,6 +241,7 @@ exports.main = async (event) => {
     if (action === 'findProfile') return await findProfile(event.inviteCode);
     if (action === 'getCourses') return await getCourses(event.friendOwnerId, OPENID);
     if (action === 'listFriends') return await listFriends(OPENID);
+    if (action === 'cleanupFriends') return await cleanupFriends(OPENID);
     return fail('UNKNOWN_ACTION', '未知动作：' + action);
   } catch (e) {
     console.error('[findBuddy] 执行失败', action, e);

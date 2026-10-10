@@ -4,21 +4,26 @@
   <view class="card">
     <view class="section-title">选择要一起比对的同学</view>
 
-    <!-- 已绑定同学多选 -->
-    <view wx:if="{{friendChips.length}}" class="friend-chips">
-      <view
-        class="chip {{item.selected ? 'chip-on' : ''}}"
-        wx:for="{{friendChips}}"
-        wx:for-item="item"
-        wx:for-index="idx"
-        wx:key="owner_id"
-        data-idx="{{idx}}"
-        bindtap="onToggleFriend"
-        hover-class="chip-hover"
-      >
-        <text>{{item.nickname}}</text>
+    <!-- 已绑定同学多选（按分组展示，长按可分组/删除） -->
+    <block wx:if="{{friendChips.length}}">
+      <view class="friend-group" wx:for="{{friendGroups}}" wx:for-item="grp" wx:key="name">
+        <text class="group-label">{{grp.name || '未分组'}}</text>
+        <view class="friend-chips">
+          <view
+            class="chip {{item.selected ? 'chip-on' : ''}}"
+            wx:for="{{grp.chips}}"
+            wx:for-item="item"
+            wx:key="owner_id"
+            data-idx="{{item.idx}}"
+            bindtap="onToggleFriend"
+            bindlongpress="onLongPressFriend"
+            hover-class="chip-hover"
+          >
+            <text>{{item.nickname}}</text>
+          </view>
+        </view>
       </view>
-    </view>
+    </block>
     <view wx:else class="chips-empty">
       <text>还没有绑定的同学，输入对方邀请码即可添加</text>
     </view>
@@ -113,19 +118,6 @@
       </block>
     </view>
 
-    <!-- 空闲时段明细 -->
-    <view wx:if="{{result.length}}" class="free-list">
-      <view class="free-list-title">空闲时段明细（全员都空的时段）</view>
-      <view class="week-group" wx:for="{{result}}" wx:for-item="group" wx:key="week">
-        <view class="week-group-head">
-          <text class="week-badge">第 {{group.week}} 周</text>
-        </view>
-        <view class="slot-line" wx:for="{{group.slots}}" wx:for-item="slot" wx:key="index">
-          <text class="slot-day">{{slot.dayLabel}}</text>
-          <text class="slot-time">{{slot.text}}</text>
-        </view>
-      </view>
-    </view>
   </view>
 
   <!-- 未搜索且无结果时的引导 -->

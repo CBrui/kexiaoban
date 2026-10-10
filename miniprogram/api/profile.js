@@ -258,7 +258,9 @@ async function bindFriend(myOwnerId, friendOwnerId, friendMeta) {
   const TABLE_REL = 'relations';
   const meta = {
     friend_nickname: (friendMeta && friendMeta.nickname) || '',
-    friend_avatar_url: (friendMeta && friendMeta.avatar_url) || ''
+    friend_avatar_url: (friendMeta && friendMeta.avatar_url) || '',
+    // 分组：默认为空串（未分组）。未分组的同学会在下次登录时被清理（见 cleanupUngroupedFriends）
+    group: (friendMeta && friendMeta.group) || ''
   };
 
   if (getMode() === 'cloud') {
@@ -336,8 +338,80 @@ async function listFriendProfiles(myOwnerId) {
     .map((r) => ({
       owner_id: r.friend_owner_id,
       nickname: r.friend_nickname || '',
-      avatar_url: r.friend_avatar_url || ''
+      avatar_url: r.friend_avatar_url || '',
+      group: r.group || ''
     }));
+}
+
+/**
+ * 设置某位同学的分组。
+ * 关系表是「仅创建者可读写」，客户端可直接查/改自己的关系，无需走云函数。
+ * @param {string} friendOwnerId 对方身份
+ * @param {string} group 分组名（空串 = 取消分组）
+ * @returns {Promise<object|null>} 更新后的关系记录；不存在返回 null
+ */
+async function updateFriendGroup(friendOwnerId, group) {
+  if (!friendOwnerId) throw new Error('缺少好友标识');
+  const g = String(group || '').trim();
+  const TABLE_REL = 'relations';
+
+  if (getMode() === 'cloud') {
+    const db = getClient().database();
+    const exist = await db.collection(TABLE_REL).where({ friend_owner_id: friendOwnerId }).get();
+    if (!exist.data || !exist.data.length) return null;
+    const rel = exist.data[0];
+    await db.collection(TABLE_REL).doc(rel._id).update({ data: { group: g } });
+    return Object.assign({}, rel, { id: rel._id, group: g });
+  }
+
+  const rows = await store.select(TABLE_REL, { friend_owner_id: friendOwnerId });
+  if (!rows.length) return null;
+  await store.update(TABLE_REL, rows[0].id, { group: g });
+  return Object.assign({}, rows[0], { group: g });
+}
+
+/**
+ * 删除某位同学（解除绑定关系）。
+ * @param {string} friendOwnerId 对方身份
+ * @returns {Promise<boolean>} 是否删除了至少一条
+ */
+async function removeFriend(friendOwnerId) {
+  if (!friendOwnerId) throw new Error('缺少好友标识');
+  const TABLE_REL = 'relations';
+
+  if (getMode() === 'cloud') {
+    const db = getClient().database();
+    const exist = await db.collection(TABLE_REL).where({ friend_owner_id: friendOwnerId }).get();
+    const list = exist.data || [];
+    for (const rel of list) {
+      await db.collection(TABLE_REL).doc(rel._id).remove();
+    }
+    return list.length > 0;
+  }
+
+  const rows = await store.select(TABLE_REL, { friend_owner_id: friendOwnerId });
+  for (const r of rows) await store.remove(TABLE_REL, r.id);
+  return rows.length > 0;
+}
+
+/**
+ * 清理「未分组」的同学（产品约定：未分组的同学下次登录时删除）。
+ * 云端由 findBuddy 的 cleanupFriends 动作执行；本地模式无此语义，直接返回 0。
+ * @returns {Promise<number>} 删除的关系条数
+ */
+async function cleanupUngroupedFriends() {
+  if (getMode() !== 'cloud') return 0;
+  try {
+    const res = await getClient().callFunction({
+      name: 'findBuddy',
+      data: { action: 'cleanupFriends' }
+    });
+    const r = (res && res.result) || null;
+    return (r && r.ok && r.removed) || 0;
+  } catch (e) {
+    console.warn('[profile] 清理未分组同学失败（不影响登录）', e);
+    return 0;
+  }
 }
 
 module.exports = {
@@ -347,6 +421,9 @@ module.exports = {
   bindFriend,
   listFriends,
   listFriendProfiles,
+  updateFriendGroup,
+  removeFriend,
+  cleanupUngroupedFriends,
   genInviteCode,
   normalizeProfile
 };
