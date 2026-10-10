@@ -88,6 +88,12 @@
       <view wx:if="{{parsing && streamHint}}" class="stream-hint">{{streamHint}}</view>
       <view wx:if="{{parseError}}" class="parse-error">{{parseError}}</view>
       <view wx:if="{{shiftError}}" class="parse-error">{{shiftError}}</view>
+      <!-- 调课执行结果：说明落在哪些周，并给一键去课表核对的入口 -->
+      <view wx:if="{{shiftDone}}" class="shift-done">
+        <view class="shift-done-title">{{shiftDone}}</view>
+        <view wx:if="{{shiftDoneHint}}" class="shift-done-hint">{{shiftDoneHint}}</view>
+        <view class="btn btn-ghost shift-done-btn" bindtap="onGoTimetable">去课表看看</view>
+      </view>
       <view class="ai-notice">解析由 AI 生成，结果仅供参考，请核对后再写入</view>
     </view>
 

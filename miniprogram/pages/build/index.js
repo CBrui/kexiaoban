@@ -43,6 +43,8 @@ Page({
     // 调课（补课 / 换课 / 挪课 / 停课）
     shiftPlans: [],          // 变更计划预览（展示用，已转成 WXML 友好的结构）
     shiftError: '',
+    shiftDone: '',           // 执行结果摘要（调课后保留，引导去课表页核对）
+    shiftDoneHint: '',       // 生效周次提示：不在这些周次上是看不到变化的
     _shiftRaw: [],           // 原始计划（含课程引用），执行时用它落库
 
     // 拍照导入
@@ -386,6 +388,8 @@ Page({
       parsing: true,
       parseError: '',
       shiftError: '',
+      shiftDone: '',
+      shiftDoneHint: '',
       parsed: [],
       shiftPlans: [],
       streamHint: '正在解析…'
@@ -476,14 +480,28 @@ Page({
       }
 
       wx.hideLoading();
-      wx.showToast({
-        title: `已调整：改 ${updated} · 删 ${removed} · 加 ${added}`,
-        icon: 'none',
-        duration: 2500
+      const doneText = `已调整：改 ${updated} · 删 ${removed} · 加 ${added}`;
+      wx.showToast({ title: doneText, icon: 'none', duration: 2500 });
+
+      // 变更落在哪些周：切回课表页时若不在这些周次上，是看不到变化的，
+      // 所以明确告诉用户去哪一周看，避免以为「调了但没生效」。
+      const weeks = [];
+      plans.forEach((p) => {
+        const w = p.target && p.target.week;
+        if (w && weeks.indexOf(w) === -1) weeks.push(w);
       });
+      const weekText = weeks.length
+        ? `生效周次：第 ${weeks.sort((a, b) => a - b).join('、')} 周`
+        : '';
 
       this._shiftRaw = [];
-      this.setData({ shiftPlans: [], shiftError: '', dialogText: '' });
+      this.setData({
+        shiftPlans: [],
+        shiftError: '',
+        dialogText: '',
+        shiftDone: doneText,
+        shiftDoneHint: weekText
+      });
 
       if (conflicts) {
         console.warn('[build] 本次调课存在节次冲突', conflicts);

@@ -11,6 +11,7 @@
  *   不要用它去覆盖或代替平台鉴权。
  */
 const { getClient, getMode } = require('./client');
+const { fetchAll } = require('./doc');
 const store = require('./store');
 
 const TABLE = 'profiles';
@@ -307,8 +308,8 @@ async function bindFriend(myOwnerId, friendOwnerId, friendMeta) {
 async function listFriends(myOwnerId) {
   if (getMode() === 'cloud') {
     const db = getClient().database();
-    const res = await db.collection('relations').get();
-    return res.data || [];
+    // 好友数超过 20 时，直接 get() 会静默只回前 20 条
+    return await fetchAll(db.collection('relations'));
   }
   return store.select('relations', { owner_id: myOwnerId });
 }

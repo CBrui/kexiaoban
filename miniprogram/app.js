@@ -13,7 +13,11 @@ App({
     user: null,          // 登录后写入的用户信息（profiles 表记录）
     openid: null,        // 云服务返回的用户标识
     ready: false,        // 初始化是否完成
-    readyCallbacks: []   // 等待初始化完成的回调
+    readyCallbacks: [],  // 等待初始化完成的回调
+    // 课程数据是否已在别处被写过（手工新增 / AI 建表 / 调课）。
+    // 由 api/course.js 的写操作置 true，课表页 onShow 检测到就静默重拉一次。
+    // 小程序没有跨页事件总线，用这个脏标记避免每次切页都白读一次库。
+    coursesDirty: false
   },
 
   onLaunch() {

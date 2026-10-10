@@ -25,7 +25,7 @@
  *   3. 首次使用时自动创建「默认课表」，并把历史课程（无 timetable_id）迁移过来
  */
 const { getClient, getMode } = require('./client');
-const { withIds } = require('./doc');
+const { withIds, fetchAll } = require('./doc');
 const store = require('./store');
 const config = require('../config');
 
@@ -78,9 +78,10 @@ function endDateOf(timetable) {
 async function listTimetables() {
   if (getMode() === 'cloud') {
     const db = getClient().database();
-    const res = await db.collection(TABLE).orderBy('created_at', 'asc').get();
+    // 分页拉全量：客户端单次 get() 只返回 20 条，超出静默丢弃
+    const rows = await fetchAll(db.collection(TABLE).orderBy('created_at', 'asc'));
     // 云文档主键是 _id，统一补成 id 供上层按 id 使用（否则 doc(t.id) 会报 docId must not be empty）
-    return withIds(res.data);
+    return withIds(rows);
   }
   const rows = await store.select(TABLE);
   return rows.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
@@ -259,12 +260,13 @@ async function listCoursesOf(timetableId) {
   if (timetableId == null) return [];
   if (getMode() === 'cloud') {
     const db = getClient().database();
-    const res = await db
-      .collection(COURSE_TABLE)
-      .where({ timetable_id: String(timetableId) })
-      .orderBy('created_at', 'asc')
-      .get();
-    return withIds(res.data);
+    // 课程数最容易超过 20 条，这里不分页就会静默丢掉末尾新增的课
+    const rows = await fetchAll(
+      db.collection(COURSE_TABLE)
+        .where({ timetable_id: String(timetableId) })
+        .orderBy('created_at', 'asc')
+    );
+    return withIds(rows);
   }
   const rows = await store.select(COURSE_TABLE);
   return rows
@@ -329,8 +331,10 @@ async function migrateOrphanCourses(timetableId) {
   }
   if (done) return 0;
 
+  // 全表扫描：不分页的话，落在 20 条之外的孤儿课程会被静默漏掉，
+  // 结果就是「升级后课表看着少了一截」，且再也迁不回来（done 标记已写入）
   const all = getMode() === 'cloud'
-    ? withIds((await getClient().database().collection(COURSE_TABLE).get()).data)
+    ? withIds(await fetchAll(getClient().database().collection(COURSE_TABLE)))
     : await store.select(COURSE_TABLE);
 
   const orphans = all.filter((c) => c.timetable_id == null);

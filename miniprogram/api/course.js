@@ -9,11 +9,28 @@
  * 若调用方明确传入 timetableId，则以传入的为准。
  */
 const { getClient, getMode } = require('./client');
-const { withIds } = require('./doc');
+const { withIds, fetchAll } = require('./doc');
 const store = require('./store');
 const timetableApi = require('./timetable');
 
 const TABLE = 'courses';
+
+/**
+ * 标记「课程数据已变更」。
+ *
+ * 为什么需要：小程序没有跨页面事件总线，「课表」是 tab 页、实例常驻，
+ * 在「建课」页写入课程后切回来，课表页内存里仍是旧数据（onShow 默认不重读库）。
+ * 这里统一在写操作后置脏，课表页 onShow 见到脏位就静默重拉一次 ——
+ * 既保证新数据一定看得见，又不用每次切页都白读一次数据库。
+ */
+function markDirty() {
+  try {
+    const app = typeof getApp === 'function' ? getApp() : null;
+    if (app && app.globalData) app.globalData.coursesDirty = true;
+  } catch (e) {
+    // 取不到 App 实例（如单测环境）时静默跳过，脏标记只影响刷新时机，不影响写入
+  }
+}
 
 /**
  * 解析本次操作应属的课表 id
@@ -36,12 +53,12 @@ async function listCourses(timetableId) {
 
   if (getMode() === 'cloud') {
     const db = getClient().database();
-    const res = await db
-      .collection(TABLE)
-      .where({ timetable_id: tid })
-      .orderBy('created_at', 'asc')
-      .get();
-    return withIds(res.data);
+    // 必须分页拉全量：客户端单次 get() 只有 20 条，课程数超过就会被静默截断，
+    // 丢掉的恰好是 created_at 最靠后的、也就是刚新增的那些课。
+    const rows = await fetchAll(
+      db.collection(TABLE).where({ timetable_id: tid }).orderBy('created_at', 'asc')
+    );
+    return withIds(rows);
   }
 
   const rows = await store.select(TABLE);
@@ -71,12 +88,16 @@ async function addCourse(course) {
     created_at: Date.now()
   };
 
+  let result;
   if (getMode() === 'cloud') {
     const db = getClient().database();
     const res = await db.collection(TABLE).add({ data: payload });
-    return { ...payload, id: res._id };
+    result = { ...payload, id: res._id };
+  } else {
+    result = store.insert(TABLE, payload);
   }
-  return store.insert(TABLE, payload);
+  markDirty();
+  return result;
 }
 
 /**
@@ -94,24 +115,32 @@ async function addCourses(courses, timetableId) {
  * 更新课程
  */
 async function updateCourse(id, patch) {
+  let result;
   if (getMode() === 'cloud') {
     const db = getClient().database();
     await db.collection(TABLE).doc(id).update({ data: patch });
-    return { ...patch, id };
+    result = { ...patch, id };
+  } else {
+    result = store.update(TABLE, id, patch);
   }
-  return store.update(TABLE, id, patch);
+  markDirty();
+  return result;
 }
 
 /**
  * 删除课程
  */
 async function removeCourse(id) {
+  let result;
   if (getMode() === 'cloud') {
     const db = getClient().database();
     await db.collection(TABLE).doc(id).remove();
-    return true;
+    result = true;
+  } else {
+    result = store.remove(TABLE, id);
   }
-  return store.remove(TABLE, id);
+  markDirty();
+  return result;
 }
 
 /**

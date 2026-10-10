@@ -206,26 +206,54 @@ Page({
   onShow() {
     // 从设置页返回时，节次可能已改变，需要重算时间轴
     this.refreshSchedule();
+
+    // 数据同步：课表可能刚在「课表管理」里被换过，课程也可能在别处被写过
+    // （手工新增 / AI 建表 / 调课都在「建课」页完成，本页内存不会自动更新，
+    //  不重拉就会一直显示旧课表）。首次加载中（loading）交给 onLoad 链路，不重复读。
     if (!this.data.loading && app.globalData.ready) {
-      // 可能刚在「课表管理」里切换了当前课表：先比对 id，变了就整页重载
-      this.syncTimetableIfChanged();
+      this.syncOnShow();
     }
+
     // 跨天 / 跨周：只刷新定位信息，不改变用户当前浏览的周次
     this.locateToday();
     this.startNowTicker();
   },
 
   /**
+   * 回到本页时的数据同步：先比对课表配置，再按需静默重拉课程。
+   *
+   * 两件事必须串行 —— 课表被换过的话，要先让 data 里的 timetableId / 周次收敛，
+   * 再拉课程，否则会用旧课表 id 读回一批错误的课程。
+   * _syncing 防重入：快速连续切页时 onShow 可能并发触发。
+   */
+  async syncOnShow() {
+    if (this._syncing) return;
+    this._syncing = true;
+    try {
+      const cfgChanged = await this.syncTimetableIfChanged();
+      // 只在「课表配置变了」或「别处写过课程」时读库，平时切页不白读
+      if (cfgChanged || app.globalData.coursesDirty) {
+        await this.loadCourses({ silent: true });
+      }
+    } finally {
+      this._syncing = false;
+      app.globalData.coursesDirty = false;
+    }
+  },
+
+  /**
    * 检测「当前课表」是否被换过（用户在课表管理页切换 / 改名 / 改了开课时间或周次）。
    * 变了就重载课表配置，并把视图拉回今天所在周 —— 换了一张课表后，
    * 旧的周次数字对新课表没有意义。
+   *
+   * @returns {Promise<boolean>} 配置是否发生变化（调用方据此决定是否要重拉课程）
    */
   async syncTimetableIfChanged() {
     try {
       const tt = await timetableApi.getCurrentTimetable();
       if (!tt) {
         this.setData({ noTimetable: true });
-        return;
+        return false;
       }
       const idChanged = String(tt.id) !== String(this.data.timetableId);
       const cfgChanged =
@@ -233,7 +261,7 @@ Page({
         timetableApi.clampTotalWeeks(tt.total_weeks) !== this.data.totalWeeks ||
         tt.name !== this.data.timetableName;
 
-      if (!idChanged && !cfgChanged) return;
+      if (!idChanged && !cfgChanged) return false;
 
       const totalWeeks = timetableApi.clampTotalWeeks(tt.total_weeks);
       const pos = todayPosition(tt.term_start_monday, null, totalWeeks);
@@ -257,8 +285,10 @@ Page({
         this.renderTrack();
         this.updateNowLine();
       });
+      return true;
     } catch (err) {
       console.error('[timetable] 同步课表配置失败', err);
+      return false;
     }
   },
 
@@ -840,8 +870,13 @@ Page({
     });
   },
 
-  async loadCourses() {
-    this.setData({ loading: true, error: '' });
+  /**
+   * 拉取课程并重绘轨道。只更新课程数据与轨道，不改变用户当前浏览的周次。
+   * @param {object} [options] 传 { silent: true } 时不翻动 loading 遮罩（后台静默刷新用）
+   */
+  async loadCourses(options) {
+    const silent = !!(options && options.silent);
+    this.setData(silent ? { error: '' } : { loading: true, error: '' });
     try {
       const courses = await listCourses();
       this.courses = courses || [];
@@ -855,7 +890,7 @@ Page({
       console.error('[timetable] 加载课程失败', err);
       this.setData({ error: '课表加载失败，请检查网络后重试' });
     } finally {
-      this.setData({ loading: false });
+      if (!silent) this.setData({ loading: false });
     }
   },
 

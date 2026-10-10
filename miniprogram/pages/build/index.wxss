@@ -428,3 +428,28 @@
   font-size: 22rpx;
   color: var(--color-text-tertiary);
 }
+
+/* 调课执行结果：说明改了什么、落在哪些周，并给一键去课表核对的入口 */
+.shift-done {
+  margin-top: 20rpx;
+  padding: 20rpx;
+  border: 1rpx solid var(--color-border);
+  border-radius: 12rpx;
+  background: var(--color-primary-soft);
+}
+
+.shift-done-title {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.shift-done-hint {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: var(--color-text-secondary);
+}
+
+.shift-done-btn {
+  margin-top: 16rpx;
+}

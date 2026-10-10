@@ -1585,6 +1585,75 @@ const storeApi = require(path.join(M, 'api/store'));
   eq('三四节 → [3,4]', shiftLogic.parseSlots('三四节'), [3, 4]);
   eq('无节次 → null', shiftLogic.parseSlots('上周二的课'), null);
 
+  /* ============ 【52】分页拉全量 fetchAll ============ */
+  group('【52】分页拉全量 fetchAll —— 云数据库单次上限防线');
+  {
+    const { fetchAll } = require(path.join(M, 'api/doc'));
+
+    /**
+     * 伪造云数据库 Query：严格模拟「单次最多返回 pageLimit 条」的真实限制。
+     * 客户端真实上限是 20 条，超出的部分被静默丢弃。
+     */
+    const makeQuery = (rows, pageLimit) => {
+      const q = {};
+      const calls = [];
+      let skip = 0;
+      let limit = pageLimit;
+      q.skip = (n) => { skip = n; return q; };
+      q.limit = (n) => { limit = n; return q; };
+      q.get = () => {
+        calls.push({ skip, limit });
+        const size = Math.min(limit, pageLimit);
+        return Promise.resolve({ data: rows.slice(skip, skip + size) });
+      };
+      q.calls = calls;
+      return q;
+    };
+
+    const collect = async (total, pageLimit) => {
+      const rows = [];
+      for (let i = 0; i < total; i++) rows.push({ _id: 'r' + i, i });
+      const q = makeQuery(rows, pageLimit);
+      const got = await fetchAll(q, { pageSize: 20 });
+      return { got, calls: q.calls, rows };
+    };
+
+    // 关键回归：30 条数据在 20 条上限下必须全部取回。
+    // 这正是「调课提示已成功、课表页却毫无变化」的根因 —— 新增的课按 created_at
+    // 排在最末尾，直接被 20 条上限截掉。
+    const c30 = await collect(30, 20);
+    eq('超过单页上限时拉回全部 30 条', c30.got.length, 30);
+    eq('分页次数正确（20 + 10）', c30.calls.length, 2);
+    eq('第二页 skip 正确', c30.calls[1].skip, 20);
+    eq('末尾数据不丢（最新创建的课）', c30.got[29].i, 29);
+    eq('返回顺序与库内一致', c30.got.map((r) => r.i).join(','), c30.rows.map((r) => r.i).join(','));
+
+    // 注意：数据「刚好满一页」时无法区分「正好取完」和「后面还有」，
+    // 因此必须多探一次空页来确认 —— 多出的这一次请求是正确性必需的代价。
+    const c20 = await collect(20, 20);
+    eq('刚好一页取回 20 条', c20.got.length, 20);
+    eq('刚好满页需多探一次确认无更多', c20.calls.length, 2);
+
+    const c5 = await collect(5, 20);
+    eq('不足一页只请求一次', c5.calls.length, 1);
+    eq('不足一页取回 5 条', c5.got.length, 5);
+
+    const c40 = await collect(40, 20);
+    eq('整倍数页数取全（40 条）', c40.got.length, 40);
+    eq('整倍数时多探一次空页收尾', c40.calls.length, 3);
+
+    const c0 = await collect(0, 20);
+    eq('空表返回空数组', c0.got.length, 0);
+    eq('空表只请求一次', c0.calls.length, 1);
+
+    // 安全阀：总量上限生效，避免异常数据把内存打爆 / 无限分页
+    const huge = [];
+    for (let i = 0; i < 500; i++) huge.push({ _id: 'h' + i, i });
+    const qHuge = makeQuery(huge, 20);
+    const gotHuge = await fetchAll(qHuge, { pageSize: 20, max: 60 });
+    ok('总量上限生效（不无限分页）', gotHuge.length >= 60 && gotHuge.length <= 80, `实际 ${gotHuge.length}`);
+  }
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);
