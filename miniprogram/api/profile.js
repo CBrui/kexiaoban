@@ -319,6 +319,19 @@ async function listFriends(myOwnerId) {
  * 失败时回退到关系表里的 friend_nickname。
  */
 async function listFriendProfiles(myOwnerId) {
+  // 分组信息存在关系表里，而关系表是「仅创建者可读写」——客户端可直读自己的关系，
+  // 因此先把它拿到，作为 group 的权威来源（不依赖云函数版本）。
+  let rels = [];
+  try {
+    rels = (await listFriends(myOwnerId)) || [];
+  } catch (e) {
+    rels = [];
+  }
+  const relByOwner = {};
+  rels.forEach((r) => {
+    if (r && r.friend_owner_id) relByOwner[r.friend_owner_id] = r;
+  });
+
   if (getMode() === 'cloud') {
     try {
       const res = await getClient().callFunction({
@@ -326,14 +339,21 @@ async function listFriendProfiles(myOwnerId) {
         data: { action: 'listFriends' }
       });
       const r = (res && res.result) || null;
-      if (r && r.ok && Array.isArray(r.friends)) return r.friends;
+      if (r && r.ok && Array.isArray(r.friends)) {
+        // 昵称/头像由服务端补齐，分组以本地关系表为准（服务端 listFriends 也回传，
+        // 但即便云函数是旧版没回传 group，这里也能兜住）
+        return r.friends.map((f) => {
+          const rel = relByOwner[f.owner_id] || {};
+          return Object.assign({}, f, { group: rel.group || f.group || '' });
+        });
+      }
       console.warn('[profile] listFriends 未成功，回退关系表昵称', r && (r.error || r.message));
     } catch (e) {
       console.warn('[profile] listFriends 云函数不可用，回退关系表昵称', e);
     }
   }
-  const rels = await listFriends(myOwnerId);
-  return (rels || [])
+
+  return rels
     .filter((r) => r && r.friend_owner_id)
     .map((r) => ({
       owner_id: r.friend_owner_id,

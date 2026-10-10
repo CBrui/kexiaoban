@@ -140,13 +140,16 @@ Page({
 
   onToggleFriend(e) {
     const idx = Number(e.currentTarget.dataset.idx);
-    const chip = this.data.friendChips[idx];
+    const chips = this.data.friendChips;
+    const chip = chips[idx];
     if (!chip) return;
-    const key = `friendChips[${idx}].selected`;
     const selected = !chip.selected;
+    chips[idx] = Object.assign({}, chip, { selected });
+    // 同步重建分组视图，否则渲染用的 friendGroups 快照不会跟着变，看起来「选不中」
     this.setData({
-      [key]: selected,
-      selectedCount: this.data.friendChips.filter((c, i) => (i === idx ? selected : c.selected)).length
+      friendChips: chips,
+      friendGroups: this.buildFriendGroups(chips),
+      selectedCount: chips.filter((c) => c.selected).length
     });
   },
 
@@ -205,8 +208,16 @@ Page({
   async applyFriendGroup(ownerId, group) {
     try {
       await updateFriendGroup(ownerId, group);
+      // 乐观更新本地：立即反映分组，不依赖云端 listFriends 是否已回传 group
+      const chips = this.data.friendChips.slice();
+      const c = chips.find((x) => x.owner_id === ownerId);
+      if (c) c.group = group;
+      this.setData({
+        friendChips: chips,
+        friendGroups: this.buildFriendGroups(chips)
+      });
       wx.showToast({ title: '已设置分组', icon: 'success' });
-      await this.loadFriends();
+      this.loadFriends();   // 异步再同步一次云端
     } catch (e) {
       console.error('[match] 设置分组失败', e);
       wx.showToast({ title: '设置失败，请重试', icon: 'none' });
@@ -216,8 +227,15 @@ Page({
   async applyRemoveFriend(ownerId) {
     try {
       await removeFriend(ownerId);
+      // 乐观更新本地：立即移除，不依赖云端
+      const chips = this.data.friendChips.filter((x) => x.owner_id !== ownerId);
+      this.setData({
+        friendChips: chips,
+        friendGroups: this.buildFriendGroups(chips),
+        selectedCount: chips.filter((c) => c.selected).length
+      });
       wx.showToast({ title: '已删除', icon: 'success' });
-      await this.loadFriends();
+      this.loadFriends();
     } catch (e) {
       console.error('[match] 删除同学失败', e);
       wx.showToast({ title: '删除失败，请重试', icon: 'none' });
