@@ -136,6 +136,11 @@
         解析结果（{{parsed.length}} 门），确认后写入
         <text class="source-badge">{{usedAI ? 'AI 解析' : '本地识别'}}</text>
       </view>
+      <!-- 课表版式规则：让用户知道周次是从哪儿读出来的（周次最容易漏） -->
+      <view wx:if="{{weeksHint}}" class="layout-hint">
+        {{weeksHint}}
+        <text wx:if="{{weeksEvidence}}" class="layout-evidence">（图上原文：{{weeksEvidence}}）</text>
+      </view>
       <view class="parsed-item" wx:for="{{parsed}}" wx:key="index">
         <view class="parsed-head">
           <text class="parsed-index">#{{index + 1}}</text>

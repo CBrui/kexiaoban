@@ -127,6 +127,22 @@
 }
 
 /* ---------- 解析结果 ---------- */
+
+/* 课表版式规则提示：周次最容易漏，把「周次写在哪」显式说出来 */
+.layout-hint {
+  margin: 8rpx 0 12rpx;
+  padding: 12rpx 16rpx;
+  border-radius: 10rpx;
+  background: rgba(58, 122, 254, 0.08);
+  font-size: 22rpx;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.layout-evidence {
+  color: var(--color-text-tertiary);
+}
+
 .parsed-item {
   border: 1rpx solid var(--color-border);
   border-radius: 16rpx;

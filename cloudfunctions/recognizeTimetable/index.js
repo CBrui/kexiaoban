@@ -18,11 +18,27 @@
  *   这就是「对话建表与图片识别是同一条管线的两种输入形态」的落地。
  *
  * 传输契约（event）：
- *   { fileID: string }  → { ok: true, raw: string }   raw 为模型原始输出
- *   错误统一返回 { ok: false, error, message }
+ *   { fileID: string }                  → { ok, raw, layout, model, ms }
+ *   { fileID, layout: false }           → 跳过版式分析，只跑一次提取（省时省钱）
+ *   { probe: true }                     → 模型通道探活
+ *   { model: '...' }                    → 临时指定视觉模型（A/B 对比）
+ *   错误统一返回 { ok: false, error, message, detail, code }
  *
- * 注意：本函数**不**解析 JSON。解析与校验统一由客户端 `api/ai.js` 完成，
- * 避免同一套逻辑在两端各写一遍。云函数只保证「拿到模型的完整文本输出」。
+ * 两阶段设计（2026-10-10 新增，解决「识别不到周次」）：
+ *   阶段一 版式分析：只让模型读懂课表的「阅读规则」—— 尤其是**周次信息写在
+ *   哪里**（格子内 / 标题 / 图例 / 按周次分块 / 用颜色区分）。因为真实课表的
+ *   周次常常不在格子里，而原提示词只说了「weeks 是个字符串字段」，模型不知道
+ *   该去哪找，于是普遍返回 null。
+ *   阶段二 课程提取：把阶段一得出的版式规则**注入提示词**，再让模型按规则提取
+ *   课程与周次。规则先行，等于给模型一张「寻宝图」。
+ *
+ * 两阶段的代价：多一次视觉调用（实测约 +3~5 秒），总计仍在 15 秒内，
+ * 远低于 callFunction 的 60 秒硬上限。版式分析失败时不阻断主流程（降级为
+ * 单阶段提取 + layoutError 标记）。
+ *
+ * 注意：本函数**不**解析课程 JSON。解析与校验统一由客户端 `api/ai.js` 完成，
+ * 避免同一套逻辑在两端各写一遍。云函数只保证「拿到模型的完整文本输出」，
+ * 外加版式分析的原始文本。
  */
 const cloud = require('wx-server-sdk');
 
@@ -62,19 +78,75 @@ const FALLBACK_VISION_MODEL = 'hunyuan-t1-vision-20250916';
 // 单张图片大小上限（字节）：超过直接拒绝，避免把超大图喂给模型浪费额度
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+/**
+ * 两次模型调用的**总时间预算**（毫秒）。
+ *
+ * 两阶段设计后，最坏情况是「版式分析 + 课程提取」各跑满 50 秒 = 100 秒，
+ * 直接撞破云函数 60 秒的限制（客户端也是 60 秒硬上限）。所以必须有一个全局
+ * 预算：每次调用前算剩余额度，第二次调用只允许用剩下的时间。留 15 秒给
+ * 图片下载、回传与冷启动。
+ */
+const TOTAL_MODEL_BUDGET = 45000;
+
+/** 至少给第二次调用留这么久，否则不划算 —— 省下的时间不够跑完提取 */
+const MIN_CALL_BUDGET = 4000;
+
 const fail = (error, message, extra) =>
   Object.assign({ ok: false, error, message: message || '' }, extra || {});
 
 /**
- * 系统提示词：把模型输出空间压缩到「固定字段 JSON 数组」。
- * 与客户端 P1 的提示词口径保持一致，但额外强调网格布局的判读规则 ——
- * 截图是二维表格，模型需要理解「横轴星期、纵轴节次」才能正确映射坐标。
+ * 阶段一提示词：课表**版式分析**（不提取课程）。
  *
- * 实战教训（2026-10-10 实测）：hunyuan-t1-vision 若不给出示例，会自创字段名
- * （day / period / courseName / classroom）、用中文写星期、并把结果包进
- * <answer> 标签。仅靠「字段固定为…」的说明约束不住，必须给一条完整示例。
+ * 为什么单独做这一步：真实课表的周次信息位置极其多变 —— 有的写在每个格子里，
+ * 有的只写在标题（"第1-16周课表"），有的按周次把表格切成好几块（左表 1-8 周、
+ * 右表 9-16 周），有的用底色 + 图例区分单双周。原提示词只交代了「weeks 是字符串
+ * 字段」，模型根本没有「去哪找周次」的线索，于是大面积返回 null —— 用户反馈的
+ * 「识别不到周数」就是这么来的。
+ *
+ * 这一步先把版式的「阅读规则」抠出来（尤其是 weeks_source 与 weeks_evidence），
+ * 下一步再把它注入提取提示词。规则先行，模型才知道该看哪里。
  */
-const SYSTEM_PROMPT = [
+const LAYOUT_PROMPT = [
+  '你是一个课表版式分析助手。用户会给你一张课表截图或照片。',
+  '这一步**不要提取课程**，只做一件事：读懂这张课表的「阅读规则」，供下一步提取课程使用。',
+  '',
+  '请输出一个 JSON 对象，字段名严格使用下面这些英文名，禁止改名、禁止增加字段：',
+  '  title             课表标题文字（原样抄写，没有则填 null）',
+  '  axis_x            横向表头，逐项列出，如 ["周一","周二","周三","周四","周五"]',
+  '  axis_y            纵向表头，逐项列出，如 ["第1节","第2节","第3节"]',
+  '  weeks_source      周次信息出现在哪里，只能取以下值之一：',
+  '                      "cell"   写在每个课程格子里（格子里有"1-16周"这类文字）',
+  '                      "header" 只写在标题或表头（如标题是"第1-16周课表"）',
+  '                      "legend" 写在图例/说明文字里（如底部"浅蓝=1-16周，浅黄=1-8周"）',
+  '                      "block"  表格按周次分成多块，每块有各自的标题',
+  '                      "color"  用颜色/底色区分，需要对照图例才能确定',
+  '                      "none"   图上确实没有任何周次信息',
+  '  weeks_evidence    把图上**所有**与周次有关的文字**原样抄下来**（标题里的、表头里的、',
+  '                    区块标题里的、图例里的、格子里的，全部抄）。这是最关键的一项，务必抄全。',
+  '  weeks_mapping     周次与适用范围的对应关系，数组，每项形如',
+  '                    {"scope":"适用范围","weeks":"周次原文"}。',
+  '                    整表统一时： [{"scope":"整个表格","weeks":"1-16周"}]',
+  '                    分块时：     [{"scope":"左侧表格","weeks":"1-8周"},{"scope":"右侧表格","weeks":"9-16周"}]',
+  '                    没有则填 []',
+  '  slot_rule         节次编号说明：纵向表头如何编号、是否包含午休/晚间行、',
+  '                    是否两小节合并为一个大节。不确定填 null。',
+  '  cell_rule         格子里文字的组织方式，如"第一行课程名，第二行教师，第三行教室"',
+  '  multi_course_rule 同一时段出现多门课时的表现形式（单双周交替 / 分周次并列 / 上下半学期不同课）',
+  '  notes             其他会影响判读的说明',
+  '',
+  '【铁律】',
+  '只输出一个 JSON 对象。不要解释、不要加 markdown 代码块、不要加 <answer> 等标签。',
+  '第一个字符必须是 { ，最后一个字符必须是 } 。',
+  '看不清或图中没有的信息填 null，绝对不要猜测或编造周次。'
+].join('\n');
+
+/**
+ * 阶段二提示词：课程提取（可注入阶段一的版式规则）。
+ *
+ * 实战教训（2026-10-10 实测）：仅靠「字段固定为…」的说明约束不住模型，必须给
+ * 完整示例；同时**必须显式告诉它周次该去哪读**，否则大量字段返回 null。
+ */
+const EXTRACT_PROMPT_BASE = [
   '你是一个课表识别助手。用户会给你一张课表截图或照片，你要把它还原成结构化 JSON。',
   '',
   '课表通常是二维表格：横向是星期（周一…周日），纵向是节次（第1节…第N节），',
@@ -90,12 +162,12 @@ const SYSTEM_PROMPT = [
   '  slot_count   连续节数（数字，跨几节就填几，只占一节填 1）',
   '  teacher      教师（字符串）',
   '  location     上课地点（字符串）',
-  '  weeks        周次规则（字符串，如 "1-16" 或 "1-16 单" 或 "3,5,7"）',
+  '  weeks        周次规则（字符串，如 "1-16" 或 "1-16 单" 或 "1-16 双" 或 "3,5,7"）',
   '',
   '【正确输出示例】（严格照此格式，注意字段名与数字类型）',
   '[',
   '  {"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2,"teacher":"张伟","location":"A101","weeks":"1-16"},',
-  '  {"name":"大学英语","day_of_week":1,"start_slot":3,"slot_count":1,"teacher":"李娜","location":"B203","weeks":null}',
+  '  {"name":"大学英语","day_of_week":1,"start_slot":3,"slot_count":1,"teacher":"李娜","location":"B203","weeks":"1-8"}',
   ']',
   '',
   '【判读规则】',
@@ -103,9 +175,47 @@ const SYSTEM_PROMPT = [
   '2. 一门课跨多个节次时必须合并为一条记录（slot_count 填跨的节数），不要逐个格子拆成多条。',
   '3. 同一时段若确有多门课（单双周交替、上下半学期不同课），按不同课程分别输出。',
   '4. 节次序号以左侧表头（「第1节」「第2节」…）为准；表头被裁掉无法确定时 start_slot 填 null。',
-  '5. 星期必须是 1-7 的数字，不要写「周一」；周次是字符串，不要换算成别的形式。',
+  '5. 星期必须是 1-7 的数字，不要写「周一」。',
   '6. 图片里没有可识别的课程（拍糊了、不是课表），输出空数组 []。'
 ].join('\n');
+
+/**
+ * 周次专项要求 —— 单独成一节，因为这是最容易丢信息的字段。
+ * 明确「按 weeks_source 指出的位置去读」，并给出每种情形的读法。
+ */
+const WEEKS_RULES = [
+  '',
+  '【周次的读法（务必逐条执行，周次最容易漏）】',
+  '1. 课表把周次写在哪里，就按下面说明去读，**不要因为格子里没写周次就填 null**：',
+  '   - cell   逐格读格子里的周次文字（如 "1-16周"、"9-16周"、"单周"、"双周"）。',
+  '   - header 标题/表头给的是整张表的周次，把它套用到每一门课。',
+  '   - legend 按图例说明（颜色、符号与周次的对应）确定每门课的周次。',
+  '   - block  表格按周次分块，按课程所在区块的标题确定其周次。',
+  '   - color  按格子底色对照图例确定周次。',
+  '2. weeks 一律填**周次规则原文的数字形式**，例如 "1-16"、"1-8"、"9-16"、',
+  '   "1-16 单"、"1-16 双"、"3,5,7"。可以去掉「第」「周」等字，但不要换算成日期，',
+  '   不要写「每周」「全学期」这类无法解析的话。',
+  '3. 如果同一格子里并列了两门课且周次不同（如单周一门、双周一门），',
+  '   拆成两条记录，各自填自己的周次。',
+  '4. 只有在这张图确实没有任何周次线索（weeks_source 为 none）时，才填 null。'
+].join('\n');
+
+/**
+ * 把阶段一的版式分析结果拼进提取提示词。
+ * @param {string} layoutRaw 阶段一模型返回的原始文本（可能是 JSON，也可能带杂质）
+ */
+function buildExtractPrompt(layoutRaw) {
+  const parts = [EXTRACT_PROMPT_BASE];
+  if (layoutRaw && String(layoutRaw).trim()) {
+    parts.push(
+      '',
+      '【本张课表的版式规则（前一步已分析得出，必须遵守）】',
+      String(layoutRaw).trim().slice(0, 2000)
+    );
+  }
+  parts.push(WEEKS_RULES);
+  return parts.join('\n');
+}
 
 /**
  * 下载云存储文件并转 base64。
@@ -189,44 +299,95 @@ exports.main = async (event) => {
     console.error('[recognizeTimetable] 下载失败', e);
     return fail('DOWNLOAD_FAILED', '图片下载失败，请重试');
   }
-  console.log('[recognizeTimetable] 下载耗时', Date.now() - tDownload, 'ms, bytes=', image.bytes);
+  const downloadMs = Date.now() - tDownload;
+  console.log('[recognizeTimetable] 下载耗时', downloadMs, 'ms, bytes=', image.bytes);
 
+  const dataUrl = `data:${mimeOf(fileID)};base64,${image.base64}`;
+  const model = ai.createModel(MODEL_GROUP);
+
+  // 全局时间预算起点：后面每次模型调用都从这里扣额度
+  const tBudgetStart = Date.now();
+  const remaining = () => TOTAL_MODEL_BUDGET - (Date.now() - tBudgetStart);
+
+  // ---------- 构建带图的多模态 messages ----------
+  const buildMessages = (systemPrompt, userText) => [
+    { role: 'system', content: systemPrompt },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: userText },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]
+    }
+  ];
+
+  // ---------- 阶段一：版式分析（可跳过） ----------
+  // 只让模型读懂「阅读规则」，尤其周次写在哪里。失败不阻断主流程。
+  const wantLayout = !(event && event.layout === false);
+  let layoutRaw = '';
+  let layoutMs = 0;
+  let layoutError = '';
+
+  if (wantLayout) {
+    const tLayout = Date.now();
+    // 版式分析最多用掉一半预算，保证提取阶段还有时间
+    const layoutBudget = Math.min(AI_TIMEOUT, Math.max(MIN_CALL_BUDGET, Math.floor(remaining() * 0.5)));
+    try {
+      const r = await model.generateText(
+        {
+          model: visionModel,
+          messages: buildMessages(
+            LAYOUT_PROMPT,
+            '请分析这张课表的版式规则，按要求的 JSON 对象输出。'
+          )
+        },
+        { timeout: layoutBudget }
+      );
+      layoutRaw = (r && r.text) || '';
+      layoutMs = Date.now() - tLayout;
+      console.log('[recognizeTimetable] 版式分析耗时', layoutMs, 'ms, len=', layoutRaw.length);
+    } catch (e) {
+      layoutMs = Date.now() - tLayout;
+      layoutError = String((e && (e.message || e.errMsg)) || e).slice(0, 200);
+      console.error('[recognizeTimetable] 版式分析失败，降级为单阶段提取', e);
+    }
+  }
+
+  // ---------- 阶段二：课程提取（带上版式规则） ----------
   const tModel = Date.now();
+  const extractBudget = Math.max(MIN_CALL_BUDGET, Math.min(AI_TIMEOUT, remaining()));
   try {
-    const model = ai.createModel(MODEL_GROUP);
     const result = await model.generateText(
       {
         model: visionModel,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: '请识别这张课表，按要求的 JSON 格式输出。' },
-              {
-                type: 'image_url',
-                image_url: { url: `data:${mimeOf(fileID)};base64,${image.base64}` }
-              }
-            ]
-          }
-        ]
+        messages: buildMessages(
+          buildExtractPrompt(layoutRaw),
+          '请识别这张课表，按要求的 JSON 数组格式输出。'
+        )
       },
-      { timeout: AI_TIMEOUT }
+      { timeout: extractBudget }
     );
 
     // 只回传文本，JSON 解析与 Schema 校验统一放在客户端管线里做
     const raw = (result && result.text) || '';
     const modelMs = Date.now() - tModel;
-    console.log('[recognizeTimetable] 模型耗时', modelMs, 'ms, rawLen=', raw.length, 'model=', visionModel);
+    console.log(
+      '[recognizeTimetable] 提取耗时', modelMs, 'ms, rawLen=', raw.length,
+      'model=', visionModel, 'layout=', wantLayout ? (layoutRaw ? 'ok' : 'failed') : 'skipped',
+      'extractBudget=', extractBudget
+    );
     if (!raw) return fail('EMPTY_RESULT', '模型没有返回内容，请换一张更清晰的图片');
 
     return {
       ok: true,
       raw,
+      layout: layoutRaw,          // 版式规则原始文本，客户端可解析后展示
       model: visionModel,
       usage: (result && result.usage) || null,
       imageBytes: image.bytes,
-      ms: { download: tModel - tDownload, model: modelMs, total: Date.now() - tDownload }
+      ms: { download: downloadMs, layout: layoutMs, model: modelMs, total: Date.now() - tDownload },
+      layoutError: layoutError || undefined,
+      layoutSkipped: wantLayout ? undefined : true
     };
   } catch (e) {
     console.error('[recognizeTimetable] 模型调用失败', e);

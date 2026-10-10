@@ -45,6 +45,8 @@ Page({
     imageHint: '',           // 识别进度提示
     imageElapsed: 0,         // 识别已耗时（秒），用于可视化等待
     imageError: '',          // 识别错误提示
+    weeksHint: '',           // 课表版式规则摘要（周次写在哪），拍图识别后展示
+    weeksEvidence: '',       // 图上与周次有关的原文，供用户核对
 
     // missing_fields 里的字段名 → 中文标签（WXML 里直接索引取用）
     missingLabel: {
@@ -195,7 +197,7 @@ Page({
   },
 
   onClearImage() {
-    this.setData({ imagePath: '', imageError: '', imageHint: '', parsed: [] });
+    this.setData({ imagePath: '', imageError: '', imageHint: '', parsed: [], weeksHint: '', weeksEvidence: '' });
   },
 
   /**
@@ -214,6 +216,8 @@ Page({
       imageError: '',
       imageHint: '正在压缩并上传图片…',
       imageElapsed: 0,
+      weeksHint: '',
+      weeksEvidence: '',
       parsed: []
     });
 
@@ -235,7 +239,14 @@ Page({
       });
 
       if (res.ok) {
-        this.setData({ parsed: res.list, usedAI: true, imageHint: '' });
+        const hint = this.buildWeeksHint(res.layout);
+        this.setData({
+          parsed: res.list,
+          usedAI: true,
+          imageHint: '',
+          weeksHint: hint.text,
+          weeksEvidence: hint.evidence
+        });
         // 识别成功且已有结果，切回结果区仍在当前 tab，用户可直接核对
         wx.showToast({ title: `识别出 ${res.list.length} 门课`, icon: 'success' });
         return;
@@ -252,6 +263,29 @@ Page({
       }
       this.setData({ recognizing: false, imageHint: '', imageElapsed: 0 });
     }
+  },
+
+  /**
+   * 把版式规则总结成一行提示。用户反馈过「识别不到周数」，把「周次写在哪」
+   * 和「图上原文」摆出来，用户就能立刻判断是模型没读到、还是本来就没有。
+   */
+  buildWeeksHint(layout) {
+    if (!layout) return { text: '', evidence: '' };
+
+    const parts = [];
+    if (layout.weeksSourceText) parts.push(layout.weeksSourceText);
+    if (layout.mapping && layout.mapping.length) {
+      const m = layout.mapping
+        .map((x) => (x.scope ? `${x.scope}：${x.weeks}` : x.weeks))
+        .join('；');
+      parts.push(m);
+    }
+    const text = parts.length ? `课表规则：${parts.join('，')}` : '';
+
+    // 图上周次原文可能有几百字，展示只留开头一段
+    let evidence = layout.weeksEvidence || '';
+    if (evidence.length > 60) evidence = evidence.slice(0, 60) + '…';
+    return { text, evidence };
   },
 
   /* ---------- 对话建表 ---------- */
@@ -282,7 +316,10 @@ Page({
       parseError: '',
       parsed: [],
       streamHint: '正在解析…',
-      usedAI: false
+      usedAI: false,
+      // 对话建表没有版式分析这一步，清掉拍图遗留的规则提示
+      weeksHint: '',
+      weeksEvidence: ''
     });
 
     try {
