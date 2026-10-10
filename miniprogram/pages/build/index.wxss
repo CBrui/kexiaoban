@@ -177,3 +177,74 @@
 .missing-field {
   margin-right: 12rpx;
 }
+
+/* ---------- 拍照导入 ---------- */
+
+/* 识别预期提示：如实告知不同来源的识别效果 */
+.expect-list {
+  background: var(--color-bg);
+  border-radius: 12rpx;
+  padding: 20rpx 24rpx;
+  margin-bottom: 24rpx;
+}
+
+.expect-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8rpx 0;
+}
+
+.expect-src {
+  font-size: 26rpx;
+  color: var(--color-text-secondary);
+}
+
+.expect-lv {
+  font-size: 22rpx;
+  border-radius: 6rpx;
+  padding: 4rpx 12rpx;
+}
+
+.expect-high {
+  color: #1a7f37;
+  background: #e8f5ec;
+}
+
+.expect-mid {
+  color: #a35b00;
+  background: #fff7e8;
+}
+
+.expect-low {
+  color: #a3202b;
+  background: #fff1f0;
+}
+
+.image-preview {
+  position: relative;
+  margin-bottom: 24rpx;
+}
+
+.image-thumb {
+  width: 100%;
+  height: 320rpx;
+  border-radius: 12rpx;
+  background: var(--color-bg);
+}
+
+.image-clear {
+  position: absolute;
+  right: 16rpx;
+  bottom: 16rpx;
+  font-size: 22rpx;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 24rpx;
+  padding: 8rpx 20rpx;
+}
+
+/* 未选图时禁用「开始识别」的观感 */
+.btn-disabled {
+  opacity: 0.5;
+}

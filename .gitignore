@@ -22,3 +22,6 @@ miniprogram/project.private.config.json
 # 本地工具缓存与临时分析产物（不参与协作）
 .workbuddy/
 /overview.md
+
+# 端到端验证用的临时素材（图片、脚本等）
+.tmp/

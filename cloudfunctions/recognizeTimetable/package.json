@@ -1,0 +1,9 @@
+{
+  "name": "recognizeTimetable",
+  "version": "1.0.0",
+  "description": "课表截图识别：下载云存储图片 → 调用多模态视觉模型 → 返回结构化课程 JSON（P2 · M5）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "^4.0.1"
+  }
+}

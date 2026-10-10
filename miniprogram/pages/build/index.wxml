@@ -8,6 +8,9 @@
     <view class="tab {{tab === 'dialog' ? 'tab-active' : ''}}" data-tab="dialog" bindtap="onSwitchTab">
       <text>对话建表</text>
     </view>
+    <view class="tab {{tab === 'image' ? 'tab-active' : ''}}" data-tab="image" bindtap="onSwitchTab">
+      <text>拍照导入</text>
+    </view>
   </view>
 
   <!-- ============ 手工录入 ============ -->
@@ -60,7 +63,7 @@
   </view>
 
   <!-- ============ 对话建表 ============ -->
-  <view wx:else>
+  <view wx:if="{{tab === 'dialog'}}">
     <view class="card">
       <view class="section-title">一句话说清你的课</view>
       <textarea
@@ -79,9 +82,54 @@
       <view wx:if="{{parseError}}" class="parse-error">{{parseError}}</view>
       <view class="ai-notice">解析由 AI 生成，结果仅供参考，请核对后再写入</view>
     </view>
+  </view>
 
-    <!-- 待确认列表 -->
-    <view wx:if="{{parsed.length}}" class="card">
+  <!-- ============ 拍照导入 ============ -->
+  <view wx:if="{{tab === 'image'}}">
+    <view class="card">
+      <view class="section-title">拍一张课表照片</view>
+
+      <!-- 识别预期提示：如实告知不同来源的识别效果，避免用户期望落空 -->
+      <view class="expect-list">
+        <view class="expect-row">
+          <text class="expect-src">教务系统截图</text>
+          <text class="expect-lv expect-high">识别率高</text>
+        </view>
+        <view class="expect-row">
+          <text class="expect-src">纸质课表拍照</text>
+          <text class="expect-lv expect-mid">识别率中</text>
+        </view>
+        <view class="expect-row">
+          <text class="expect-src">手写课表</text>
+          <text class="expect-lv expect-low">识别率低</text>
+        </view>
+      </view>
+
+      <!-- 已选图片预览 -->
+      <view wx:if="{{imagePath}}" class="image-preview">
+        <image class="image-thumb" src="{{imagePath}}" mode="aspectFit" />
+        <view class="image-clear" bindtap="onClearImage">重新选择</view>
+      </view>
+
+      <view class="dialog-actions">
+        <view class="btn btn-ghost dialog-btn" bindtap="onPickImage">选择图片</view>
+        <view class="btn btn-primary dialog-btn {{imagePath ? '' : 'btn-disabled'}}" bindtap="onParseImage">
+          {{recognizing ? '识别中…' : '开始识别'}}
+        </view>
+      </view>
+
+      <view wx:if="{{recognizing}}" class="stream-hint">{{imageHint}}</view>
+      <view wx:if="{{imageError}}" class="parse-error">{{imageError}}</view>
+
+      <view class="ai-notice">
+        识别由 AI 生成，结果仅供参考，请核对后再写入。图片仅用于本次识别，识别完成后自动删除。
+      </view>
+    </view>
+  </view>
+
+  <!-- ============ 解析结果（对话 / 拍照共用） ============ -->
+  <view wx:if="{{(tab === 'dialog' || tab === 'image') && parsed.length}}">
+    <view class="card">
       <view class="section-title">
         解析结果（{{parsed.length}} 门），确认后写入
         <text class="source-badge">{{usedAI ? 'AI 解析' : '本地识别'}}</text>

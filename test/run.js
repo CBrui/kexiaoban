@@ -825,6 +825,172 @@ const storeApi = require(path.join(M, 'api/store'));
     Object.keys(aiApi.PARSE_ERROR).every((k) => aiApi.messageOf(aiApi.PARSE_ERROR[k]).length > 0));
   eq('降级：默认模型为免费体验模型 hy3', aiApi.DEFAULT_MODEL, 'hy3');
 
+  /* ============ 38. 图片识别管线（P2） ============ */
+  // 图片识别与对话建表共用同一条管线的「抽取 + Schema 校验」段：
+  //   图片 → 压缩 → 上传云存储 → 云函数调视觉模型 → extractJSON → normalizeList
+  // 这里注入假的上传器与云函数调用器，验证管线串联与错误映射，不调真实模型。
+  group('【38】图片识别管线');
+
+  eq('图片长边上限为 1600px', aiApi.IMAGE_MAX_EDGE, 1600);
+
+  // --- 主链路：云函数返回合法 JSON → 走同一套校验 ---
+  const ocrCalls = [];
+  const ocrRes = await aiApi.parseCoursesFromImage('/tmp/fake-timetable.jpg', {
+    uploader: async () => 'cloud://fake.jpg',
+    callFunction: async (fileID) => {
+      ocrCalls.push(fileID);
+      return {
+        ok: true,
+        raw: '[{"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2,' +
+             '"teacher":"王老师","location":"A301","weeks":"1-16"},' +
+             '{"name":"英语","day_of_week":3,"start_slot":3,"slot_count":2,"weeks":"1-16"}]'
+      };
+    },
+    keepImage: true
+  });
+  ok('图片识别：解析成功', ocrRes.ok);
+  eq('图片识别：识别出 2 门课', ocrRes.list.length, 2);
+  eq('图片识别：课程名正确', ocrRes.list[0].name, '高等数学');
+  eq('图片识别：跨节课程合并为一条（slot_count=2）', ocrRes.list[0].slot_count, 2);
+  eq('图片识别：教师字段正确', ocrRes.list[0].teacher, '王老师');
+  eq('图片识别：调用了云函数一次', ocrCalls.length, 1);
+
+  // --- 模型裹 markdown 代码块时同样能剥出来（截图识别的常见输出形态）---
+  const fencedRes = await aiApi.parseCoursesFromImage('/tmp/x.jpg', {
+    uploader: async () => 'cloud://x.jpg',
+    callFunction: async () => ({
+      ok: true,
+      raw: '```json\n[{"name":"物理","day_of_week":2,"start_slot":1,"slot_count":2,"weeks":"1-16"}]\n```'
+    }),
+    keepImage: true
+  });
+  ok('图片识别：能剥离 ```json 代码块', fencedRes.ok);
+  eq('图片识别：代码块内课程解析正确', fencedRes.list[0].name, '物理');
+
+  // --- 缺字段时同样标记而非猜测（与对话解析一致的口径）---
+  const partialRes = await aiApi.parseCoursesFromImage('/tmp/y.jpg', {
+    uploader: async () => 'cloud://y.jpg',
+    callFunction: async () => ({
+      ok: true,
+      raw: '[{"name":"化学","day_of_week":4}]'
+    }),
+    keepImage: true
+  });
+  ok('图片识别：缺字段仍算成功（进预览页让用户补）', partialRes.ok);
+  ok('图片识别：缺失字段被标记',
+    partialRes.list[0].missing_fields.indexOf('start_slot') >= 0);
+
+  // --- 错误映射：没有图片 ---
+  const noFileRes = await aiApi.parseCoursesFromImage('', { uploader: async () => 'cloud://n.jpg', callFunction: async () => ({ ok: true }) });
+  eq('图片识别：无图片时给 NO_FILE', noFileRes.code, aiApi.PARSE_ERROR.NO_FILE);
+
+  // --- 错误映射：云函数返回失败 ---
+  const svcFailRes = await aiApi.parseCoursesFromImage('/tmp/z.jpg', {
+    uploader: async () => 'cloud://z.jpg',
+    callFunction: async () => ({ ok: false, error: 'MODEL_ERROR', message: '模型挂了' }),
+    keepImage: true
+  });
+  eq('图片识别：服务端失败映射为 MODEL_ERROR', svcFailRes.code, aiApi.PARSE_ERROR.MODEL_ERROR);
+
+  // --- 错误映射：图片过大（服务端专门回这个码，客户端要区分出来）---
+  const tooLargeRes = await aiApi.parseCoursesFromImage('/tmp/big.jpg', {
+    uploader: async () => 'cloud://big.jpg',
+    callFunction: async () => ({ ok: false, error: 'TOO_LARGE', message: '图片过大' }),
+    keepImage: true
+  });
+  eq('图片识别：TOO_LARGE 单独映射', tooLargeRes.code, aiApi.PARSE_ERROR.IMAGE_TOO_LARGE);
+  ok('图片识别：大图提示引导用户换图',
+    tooLargeRes.message.indexOf('压缩') >= 0 || tooLargeRes.message.indexOf('换一张') >= 0);
+
+  // --- 错误映射：云函数抛异常 ---
+  const svcThrowRes = await aiApi.parseCoursesFromImage('/tmp/t.jpg', {
+    uploader: async () => 'cloud://t.jpg',
+    callFunction: async () => { throw new Error('网络中断'); },
+    keepImage: true
+  });
+  eq('图片识别：云函数异常不抛出，转错误码', svcThrowRes.code, aiApi.PARSE_ERROR.MODEL_ERROR);
+
+  // --- 错误映射：模型输出不是 JSON ---
+  const badOcrRes = await aiApi.parseCoursesFromImage('/tmp/n.jpg', {
+    uploader: async () => 'cloud://n.jpg',
+    callFunction: async () => ({ ok: true, raw: '这张图片好像不是课表' }),
+    keepImage: true
+  });
+  eq('图片识别：非 JSON 输出拒收', badOcrRes.code, aiApi.PARSE_ERROR.BAD_OUTPUT);
+
+  // --- 错误映射：识别不出课程 ---
+  const emptyOcrRes = await aiApi.parseCoursesFromImage('/tmp/e.jpg', {
+    uploader: async () => 'cloud://e.jpg',
+    callFunction: async () => ({ ok: true, raw: '[]' }),
+    keepImage: true
+  });
+  eq('图片识别：无课程时给 NO_COURSE', emptyOcrRes.code, aiApi.PARSE_ERROR.NO_COURSE);
+
+  // --- 环境无云能力时降级 ---
+  const savedCloud2 = global.wx.cloud;
+  delete global.wx.cloud;
+  const noCloudRes = await aiApi.parseCoursesFromImage('/tmp/g.jpg');
+  eq('图片识别：无云能力时给 AI_UNAVAILABLE', noCloudRes.code, aiApi.PARSE_ERROR.AI_UNAVAILABLE);
+  global.wx.cloud = savedCloud2;
+
+  ok('图片识别：错误码均有中文文案',
+    [aiApi.PARSE_ERROR.NO_FILE, aiApi.PARSE_ERROR.UPLOAD_FAILED,
+     aiApi.PARSE_ERROR.IMAGE_TOO_LARGE].every((c) => aiApi.messageOf(c).length > 0));
+
+  /* ============ 【39】真实模型输出的兼容性 ============ */
+  group('【39】真实模型输出兼容（实测踩坑回归）');
+
+  // —— 场景 A：hunyuan-t1-vision 会把结果包在 <answer> 标签里 ——
+  const wrapped = '<answer>\n[{"name":"高等数学","day_of_week":1,"start_slot":1,"slot_count":2}]\n</answer>';
+  const wrappedParsed = aiApi.extractJSON(wrapped);
+  ok('兼容：能剥离 <answer> 标签', Array.isArray(wrappedParsed) && wrappedParsed.length === 1);
+  eq('兼容：标签内课程名正确', wrappedParsed[0].name, '高等数学');
+
+  // 标签 + 外部思考过程同时存在时，不能让思考过程里的 [ ] 干扰切片
+  const noisy = '让我分析一下这张图 [图中有表格]\n<answer>[{"name":"英语"}]</answer>';
+  const noisyParsed = aiApi.extractJSON(noisy);
+  ok('兼容：思考过程干扰下仍取到 answer 内容',
+    Array.isArray(noisyParsed) && noisyParsed[0].name === '英语');
+
+  // —— 场景 B：模型自创字段名（实测 day/period/courseName/classroom）——
+  const aliased = aiApi.normalizeItem({
+    courseName: '数据结构',
+    day: 2,
+    period: 2,
+    teacher: '王强',
+    classroom: '机房301',
+    weeks: '1-16'
+  }, 6);
+  ok('兼容：courseName 别名识别为课程名', aliased && aliased.name === '数据结构');
+  eq('兼容：day 别名识别为星期', aliased.day_of_week, 2);
+  eq('兼容：period 别名识别为开始节次', aliased.start_slot, 2);
+  eq('兼容：classroom 别名识别为地点', aliased.location, '机房301');
+  eq('兼容：无缺失字段', aliased.missing_fields.length, 0);
+
+  // —— 场景 C：星期写成中文 ——
+  eq('兼容：中文「周一」转 1', aiApi.normalizeItem({ name: 'x', day_of_week: '周一' }, 6).day_of_week, 1);
+  eq('兼容：中文「星期三」转 3', aiApi.normalizeItem({ name: 'x', day_of_week: '星期三' }, 6).day_of_week, 3);
+  eq('兼容：中文「周日」转 7', aiApi.normalizeItem({ name: 'x', day: '周日' }, 6).day_of_week, 7);
+
+  // —— 场景 D：标准字段名必须优先于别名（别名只兜底，不能反向覆盖）——
+  const both = aiApi.normalizeItem({
+    name: '标准名', courseName: '别名',
+    day_of_week: 3, day: 5,
+    start_slot: 1, period: 4
+  }, 6);
+  eq('兼容：标准字段优先（name）', both.name, '标准名');
+  eq('兼容：标准字段优先（day_of_week）', both.day_of_week, 3);
+  eq('兼容：标准字段优先（start_slot）', both.start_slot, 1);
+
+  // —— 场景 E：整批数据经 alias 兼容后不丢课程 ——
+  const aliasList = aiApi.normalizeList([
+    { courseName: '高等数学', day: '周一', period: 1, classroom: 'A101', weeks: '1-16' },
+    { title: '大学英语', weekday: 3, section: 3, room: 'B203', week: '1-16' }
+  ], 6);
+  eq('兼容：批量识别不丢课程', aliasList.list.length, 2);
+  eq('兼容：批量识别字段完整', aliasList.list[0].missing_fields.length, 0);
+  eq('兼容：title/room 别名生效', aliasList.list[1].location, 'B203');
+
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
   console.log(`测试完成：通过 ${passed} 项，失败 ${failed} 项`);

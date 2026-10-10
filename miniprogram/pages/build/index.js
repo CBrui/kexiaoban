@@ -38,6 +38,13 @@ Page({
     parseError: '',
     streamHint: '',          // 流式解析进度提示（打字机效果）
     usedAI: false,           // 本次结果来自 AI 还是本地规则（用于展示来源标识）
+
+    // 拍照导入
+    imagePath: '',           // 已选图片的本地临时路径（用于预览）
+    recognizing: false,      // 图片识别中
+    imageHint: '',           // 识别进度提示
+    imageError: '',          // 识别错误提示
+
     // missing_fields 里的字段名 → 中文标签（WXML 里直接索引取用）
     missingLabel: {
       name: '课程名',
@@ -147,6 +154,81 @@ Page({
 
   onGoTimetable() {
     wx.switchTab({ url: '/pages/timetable/index' });
+  },
+
+  /* ---------- 拍照导入 ---------- */
+
+  /**
+   * 选图：优先相机，也允许从相册选（用户可能已经有教务系统截图）。
+   * 微信要求拍照/选图必须由用户点击触发，不能自动调起。
+   */
+  onPickImage() {
+    wx.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['camera', 'album'],
+      sizeType: ['compressed'],
+      success: (res) => {
+        const file = res.tempFiles && res.tempFiles[0];
+        if (!file) return;
+        this.setData({
+          imagePath: file.tempFilePath,
+          imageError: '',
+          parsed: []      // 换图后清掉上一次的结果，避免误确认
+        });
+      },
+      fail: (err) => {
+        // 用户主动取消不算错误
+        if (err && String(err.errMsg || '').indexOf('cancel') >= 0) return;
+        this.setData({ imageError: '打开相机/相册失败，请重试' });
+      }
+    });
+  },
+
+  onClearImage() {
+    this.setData({ imagePath: '', imageError: '', imageHint: '', parsed: [] });
+  },
+
+  /**
+   * 识别入口：压缩 → 上传云存储 → 云函数调视觉模型 → 复用同一套校验与预览。
+   * 与对话建表走同一条管线的不同输入形态，结果结构完全一致。
+   */
+  async onParseImage() {
+    const filePath = this.data.imagePath;
+    if (!filePath) {
+      wx.showToast({ title: '请先选择一张课表图片', icon: 'none' });
+      return;
+    }
+
+    this.setData({
+      recognizing: true,
+      imageError: '',
+      imageHint: '正在压缩并上传图片…',
+      parsed: []
+    });
+
+    try {
+      const res = await aiApi.parseCoursesFromImage(filePath, {
+        onProgress: (stage) => {
+          if (!this.data.recognizing) return;
+          this.setData({ imageHint: stage });
+        }
+      });
+
+      if (res.ok) {
+        this.setData({ parsed: res.list, usedAI: true, imageHint: '' });
+        // 识别成功且已有结果，切回结果区仍在当前 tab，用户可直接核对
+        wx.showToast({ title: `识别出 ${res.list.length} 门课`, icon: 'success' });
+        return;
+      }
+
+      this.setData({ imageError: res.message });
+    } catch (e) {
+      console.error('[build] 图片识别失败', e);
+      this.setData({ imageError: aiApi.messageOf(aiApi.PARSE_ERROR.MODEL_ERROR) });
+    } finally {
+      this.setData({ recognizing: false, imageHint: '' });
+    }
   },
 
   /* ---------- 对话建表 ---------- */
