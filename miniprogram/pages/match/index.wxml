@@ -30,9 +30,12 @@
     <text class="hint">起床/就寝节次用于裁掉你不参与的时段；「空闲」按全员都空计算</text>
   </view>
 
-  <!-- 我的同学：分组折叠在下方，点组头整组全选，展开后逐个单选 -->
+  <!-- 我的同学：分组折叠在下方，点组头整组全选，展开后逐个单选；长按进入多选管理 -->
   <view class="card">
-    <view class="section-title">选择要一起比对的同学</view>
+    <view class="section-title section-title-row">
+      <text>选择要一起比对的同学</text>
+      <text wx:if="{{managing}}" class="manage-exit" bindtap="onExitManage">取消</text>
+    </view>
     <block wx:if="{{friendChips.length}}">
       <view class="friend-group" wx:for="{{friendGroups}}" wx:for-item="grp" wx:for-index="gi" wx:key="name">
         <view class="group-head {{grp.allSelected ? 'group-head-on' : ''}}" bindtap="onToggleGroupAll" data-gi="{{gi}}">
@@ -42,7 +45,7 @@
         </view>
         <view wx:if="{{!grp.collapsed}}" class="friend-chips">
           <view
-            class="chip {{item.selected ? 'chip-on' : ''}}"
+            class="chip {{managing ? (item.checked ? 'chip-checked' : '') : (item.selected ? 'chip-on' : '')}}"
             wx:for="{{grp.chips}}"
             wx:for-item="item"
             wx:key="owner_id"
@@ -51,6 +54,7 @@
             bindlongpress="onLongPressFriend"
             hover-class="chip-hover"
           >
+            <text wx:if="{{managing && item.checked}}" class="chip-check">✓</text>
             <text>{{item.nickname}}</text>
           </view>
         </view>
@@ -58,6 +62,18 @@
     </block>
     <view wx:else class="chips-empty">
       <text>还没有绑定的同学，输入对方邀请码即可添加</text>
+    </view>
+  </view>
+
+  <!-- 多选管理操作条 -->
+  <view wx:if="{{managing}}" class="manage-bar">
+    <view class="manage-bar-info">
+      <text class="manage-bar-count">已选 {{manageCheckedCount}} 位</text>
+      <text class="manage-bar-all" bindtap="onToggleCheckAll">{{manageAllChecked ? '取消全选' : '全选'}}</text>
+    </view>
+    <view class="manage-bar-btns">
+      <view class="manage-btn" bindtap="onBatchMove">移动到分组</view>
+      <view class="manage-btn manage-btn-danger" bindtap="onBatchRemove">删除</view>
     </view>
   </view>
 

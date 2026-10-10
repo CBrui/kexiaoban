@@ -378,3 +378,81 @@
 }
 
 .legend-partial { background: #3a7afe; }
+
+/* ---------- 多选管理模式 ---------- */
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.manage-exit {
+  font-size: 26rpx;
+  color: var(--color-text-secondary);
+  padding: 4rpx 8rpx;
+}
+
+/* 管理勾选高亮：实心主色 + 白字（与比对选中的浅色 chip-on 区分） */
+.chip-checked {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-color: var(--color-primary);
+  font-weight: 500;
+}
+
+.chip-check {
+  margin-right: 6rpx;
+}
+
+/* 底部操作条 */
+.manage-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20rpx 24rpx;
+  padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
+  background: #ffffff;
+  box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.06);
+  z-index: 10;
+}
+
+.manage-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+}
+
+.manage-bar-count {
+  font-size: 26rpx;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.manage-bar-all {
+  font-size: 24rpx;
+  color: var(--color-primary);
+}
+
+.manage-bar-btns {
+  display: flex;
+  gap: 16rpx;
+}
+
+.manage-btn {
+  padding: 14rpx 32rpx;
+  border-radius: 100rpx;
+  font-size: 26rpx;
+  color: var(--color-primary);
+  background: #ffffff;
+  border: 1rpx solid var(--color-primary);
+}
+
+.manage-btn-danger {
+  color: #ffffff;
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+}

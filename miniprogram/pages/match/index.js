@@ -42,9 +42,13 @@ Page({
   data: {
     inviteCode: '',
     loading: false,
-    friendChips: [],     // [{owner_id, nickname, avatar_url, group, selected}]
+    friendChips: [],     // [{owner_id, nickname, avatar_url, group, selected, checked}]
     friendGroups: [],    // [{name, chips:[{...chip, idx}]}] 分组渲染视图
     selectedCount: 0,
+    // 多选管理模式（长按进入）：checked 与 selected 分离，避免批量删除污染比对勾选
+    managing: false,
+    manageCheckedCount: 0,
+    manageAllChecked: false,
     tip: '',
     tipType: '',         // empty | none | error
     searched: false,
@@ -74,6 +78,7 @@ Page({
 
     this._axis = axis;
     this._totalSlots = totalSlots;
+    this._managing = false;   // 与 data.managing 同步的实例字段，供 buildFriendGroups 读
 
     this.setData({ axis, slotOptions, sleepSlot: totalSlots });
     app.whenReady(() => this.loadFriends());
@@ -96,7 +101,8 @@ Page({
           nickname: f.nickname || this.shortId(f.owner_id),
           avatar_url: f.avatar_url || '',
           group: f.group || '',
-          selected: false
+          selected: false,
+          checked: false
         }));
       this.setData({
         friendChips,
@@ -111,22 +117,24 @@ Page({
    * 把扁平的同学列表按分组拆成渲染视图。
    * 未分组（group 为空）归入 name='' 的组，界面显示为「未分组」。
    * 每组带 collapsed（默认折叠）与 selectedCount（已选数），折叠态由 this._collapsed 记忆。
+   * 多选管理模式下，组头高亮 / 计数依据 checked（管理勾选），否则依据 selected（比对勾选）。
    */
   buildFriendGroups(chips) {
     const collapsed = this._collapsed || {};
+    const key = this._managing ? 'checked' : 'selected';
     const order = [];
     const map = {};
     chips.forEach((c, idx) => {
-      const key = (c.group && String(c.group).trim()) || '';
-      if (!map[key]) { map[key] = []; order.push(key); }
-      map[key].push(Object.assign({}, c, { idx }));
+      const gkey = (c.group && String(c.group).trim()) || '';
+      if (!map[gkey]) { map[gkey] = []; order.push(gkey); }
+      map[gkey].push(Object.assign({}, c, { idx }));
     });
-    return order.map((key) => {
-      const groupChips = map[key];
-      const selectedCount = groupChips.filter((c) => c.selected).length;
+    return order.map((gkey) => {
+      const groupChips = map[gkey];
+      const selectedCount = groupChips.filter((c) => c[key]).length;
       return {
-        name: key,
-        collapsed: collapsed[key] !== undefined ? collapsed[key] : true,
+        name: gkey,
+        collapsed: collapsed[gkey] !== undefined ? collapsed[gkey] : true,
         chips: groupChips,
         selectedCount,
         // 整组全选（且非空组）→ 组头高亮；部分选中 → 计数文字变蓝
@@ -152,6 +160,11 @@ Page({
   },
 
   onToggleFriend(e) {
+    // 多选管理模式下，点击 = 切换管理勾选（checked），而不是比对勾选
+    if (this.data.managing) {
+      this.onToggleCheck(e);
+      return;
+    }
     const idx = Number(e.currentTarget.dataset.idx);
     const chips = this.data.friendChips;
     const chip = chips[idx];
@@ -171,6 +184,18 @@ Page({
     const gi = Number(e.currentTarget.dataset.gi);
     const grp = this.data.friendGroups[gi];
     if (!grp) return;
+
+    // 多选管理模式：组头切换整组的 checked
+    if (this.data.managing) {
+      const target = !grp.chips.every((c) => c.checked);
+      const chips = this.data.friendChips.slice();
+      grp.chips.forEach((c) => {
+        chips[c.idx] = Object.assign({}, chips[c.idx], { checked: target });
+      });
+      this.refreshManageView(chips);
+      return;
+    }
+
     const target = !grp.chips.every((c) => c.selected);
     const chips = this.data.friendChips.slice();
     grp.chips.forEach((c) => {
@@ -197,88 +222,150 @@ Page({
     this.setData({ inviteCode: e.detail.value.toUpperCase() });
   },
 
-  /* ---------- 长按同学：分组 / 删除 ---------- */
+  /* ---------- 长按同学：进入多选管理模式（批量删除 / 移动分组） ---------- */
   onLongPressFriend(e) {
     const idx = Number(e.currentTarget.dataset.idx);
-    const chip = this.data.friendChips[idx];
+    const chips = this.data.friendChips;
+    const chip = chips[idx];
     if (!chip) return;
-    this._pressIdx = idx;
 
-    const groups = this.existingGroups();
-    // wx.showActionSheet 最多 6 项，分组超出时截断（仍可「新建分组」）
-    const itemList = groups.slice(0, 4).concat(['新建分组', '删除']);
-    wx.showActionSheet({
-      itemList,
-      success: (res) => this.onFriendAction(res.tapIndex, groups)
+    // 进入管理模式：勾选长按的这位，其余清空 checked
+    const newChips = chips.map((c, i) => Object.assign({}, c, { checked: i === idx }));
+    this._managing = true;
+    this.setData({
+      managing: true,
+      friendChips: newChips,
+      friendGroups: this.buildFriendGroups(newChips),
+      manageCheckedCount: 1,
+      manageAllChecked: newChips.length === 1
     });
   },
 
-  async onFriendAction(tapIndex, groups) {
-    const chip = this.data.friendChips[this._pressIdx];
+  /** 多选管理模式下：点击 chip 切换勾选 */
+  onToggleCheck(e) {
+    const idx = Number(e.currentTarget.dataset.idx);
+    const chips = this.data.friendChips;
+    const chip = chips[idx];
     if (!chip) return;
-
-    if (tapIndex < groups.length) {
-      // 选择已有分组
-      await this.applyFriendGroup(chip.owner_id, groups[tapIndex]);
-    } else if (tapIndex === groups.length) {
-      // 新建分组：弹输入框
-      wx.showModal({
-        title: '新建分组',
-        editable: true,
-        placeholderText: '输入分组名称',
-        success: async (r) => {
-          if (r.confirm && r.content) {
-            await this.applyFriendGroup(chip.owner_id, r.content.trim());
-          }
-        }
-      });
-    } else {
-      // 删除
-      wx.showModal({
-        title: '删除同学',
-        content: `确定删除「${chip.nickname}」吗？删除后需重新用邀请码添加。`,
-        confirmColor: '#f53f3f',
-        success: async (r) => {
-          if (r.confirm) await this.applyRemoveFriend(chip.owner_id);
-        }
-      });
-    }
+    chips[idx] = Object.assign({}, chip, { checked: !chip.checked });
+    this.refreshManageView(chips);
   },
 
-  async applyFriendGroup(ownerId, group) {
+  /** 全选 / 取消全选（管理勾选） */
+  onToggleCheckAll() {
+    const target = !this.data.manageAllChecked;
+    const chips = this.data.friendChips.slice();
+    chips.forEach((c, i) => { chips[i] = Object.assign({}, c, { checked: target }); });
+    this.refreshManageView(chips);
+  },
+
+  /** 退出管理模式（可传入已改过 group / 已删减的 chips，避免二次覆盖） */
+  onExitManage() {
+    this.exitManage();
+  },
+
+  exitManage(chips) {
+    this._managing = false;
+    const base = chips || this.data.friendChips.slice();
+    base.forEach((c, i) => {
+      if (c.checked) base[i] = Object.assign({}, c, { checked: false });
+    });
+    this.setData({
+      managing: false,
+      manageCheckedCount: 0,
+      manageAllChecked: false,
+      friendChips: base,
+      friendGroups: this.buildFriendGroups(base)
+    });
+  },
+
+  /** 刷新管理模式视图（重建分组 + 勾选计数） */
+  refreshManageView(chips) {
+    this.setData({
+      friendChips: chips,
+      friendGroups: this.buildFriendGroups(chips),
+      manageCheckedCount: chips.filter((c) => c.checked).length,
+      manageAllChecked: chips.length > 0 && chips.every((c) => c.checked)
+    });
+  },
+
+  getCheckedOwnerIds() {
+    return this.data.friendChips.filter((c) => c.checked).map((c) => c.owner_id);
+  },
+
+  /* ---------- 批量操作 ---------- */
+
+  /** 批量删除勾选的同学 */
+  onBatchRemove() {
+    const ids = this.getCheckedOwnerIds();
+    if (!ids.length) {
+      wx.showToast({ title: '请先勾选同学', icon: 'none' });
+      return;
+    }
+    wx.showModal({
+      title: '删除同学',
+      content: `确定删除选中的 ${ids.length} 位同学吗？删除后需重新用邀请码添加。`,
+      confirmColor: '#f53f3f',
+      success: async (r) => {
+        if (!r.confirm) return;
+        try {
+          await Promise.all(ids.map((id) => removeFriend(id)));
+          const chips = this.data.friendChips.filter((c) => ids.indexOf(c.owner_id) < 0);
+          this.exitManage(chips);
+          this.setData({ selectedCount: chips.filter((c) => c.selected).length });
+          wx.showToast({ title: '已删除', icon: 'success' });
+          this.loadFriends();
+        } catch (e) {
+          console.error('[match] 批量删除同学失败', e);
+          wx.showToast({ title: '删除失败，请重试', icon: 'none' });
+        }
+      }
+    });
+  },
+
+  /** 批量移动勾选的同学到分组 */
+  onBatchMove() {
+    const ids = this.getCheckedOwnerIds();
+    if (!ids.length) {
+      wx.showToast({ title: '请先勾选同学', icon: 'none' });
+      return;
+    }
+    const groups = this.existingGroups();
+    // wx.showActionSheet 最多 6 项，分组超出时截断（仍可「新建分组」）
+    const itemList = groups.slice(0, 4).concat(['新建分组']);
+    wx.showActionSheet({
+      itemList,
+      success: (res) => {
+        if (res.tapIndex < groups.length) {
+          this.doBatchMove(ids, groups[res.tapIndex]);
+        } else {
+          wx.showModal({
+            title: '新建分组',
+            editable: true,
+            placeholderText: '输入分组名称',
+            success: (r) => {
+              if (r.confirm && r.content) this.doBatchMove(ids, r.content.trim());
+            }
+          });
+        }
+      }
+    });
+  },
+
+  async doBatchMove(ids, group) {
     try {
-      await updateFriendGroup(ownerId, group);
-      // 乐观更新本地：立即反映分组，不依赖云端 listFriends 是否已回传 group
+      await Promise.all(ids.map((id) => updateFriendGroup(id, group)));
+      // 乐观更新本地：先把 group 改到 chips 上，再退出管理模式（顺便清 checked）
       const chips = this.data.friendChips.slice();
-      const c = chips.find((x) => x.owner_id === ownerId);
-      if (c) c.group = group;
-      this.setData({
-        friendChips: chips,
-        friendGroups: this.buildFriendGroups(chips)
+      chips.forEach((c) => {
+        if (ids.indexOf(c.owner_id) >= 0) c.group = group;
       });
-      wx.showToast({ title: '已设置分组', icon: 'success' });
-      this.loadFriends();   // 异步再同步一次云端
-    } catch (e) {
-      console.error('[match] 设置分组失败', e);
-      wx.showToast({ title: '设置失败，请重试', icon: 'none' });
-    }
-  },
-
-  async applyRemoveFriend(ownerId) {
-    try {
-      await removeFriend(ownerId);
-      // 乐观更新本地：立即移除，不依赖云端
-      const chips = this.data.friendChips.filter((x) => x.owner_id !== ownerId);
-      this.setData({
-        friendChips: chips,
-        friendGroups: this.buildFriendGroups(chips),
-        selectedCount: chips.filter((c) => c.selected).length
-      });
-      wx.showToast({ title: '已删除', icon: 'success' });
+      this.exitManage(chips);
+      wx.showToast({ title: '已移动', icon: 'success' });
       this.loadFriends();
     } catch (e) {
-      console.error('[match] 删除同学失败', e);
-      wx.showToast({ title: '删除失败，请重试', icon: 'none' });
+      console.error('[match] 批量移动分组失败', e);
+      wx.showToast({ title: '移动失败，请重试', icon: 'none' });
     }
   },
 
