@@ -188,11 +188,22 @@ function buildEvents(course, opts) {
       .join('\n');
     lines.push(`DESCRIPTION:${escapeText(desc)}`);
 
+    /**
+     * ⚠️ 闹钟格式**必须**对齐 Apple 日历原生导出的写法（`ACTION:AUDIO` +
+     * `ATTACH;VALUE=URI:Basso`），不能用 `ACTION:DISPLAY`：
+     *   1. DISPLAY 只弹一段文本、不响铃，iOS 与部分安卓 ROM 在订阅日历里
+     *      会把它显示成「无提醒」（用户实测反馈），AUDIO 才是带响铃的提醒；
+     *   2. `ATTACH;VALUE=URI:Basso` 是 Apple 用的默认铃声标识，缺了它部分
+     *      客户端认为这个闹钟没有声音资源而忽略；
+     *   3. `TRIGGER` 显式写 `VALUE=DURATION`（RFC 5545 虽允许省略，但显式
+     *      声明在某些解析器上更稳）。
+     */
     if (lead > 0) {
       lines.push('BEGIN:VALARM');
-      lines.push('ACTION:DISPLAY');
+      lines.push('ACTION:AUDIO');
       lines.push(`DESCRIPTION:${escapeText(`${c.name || '上课'} 即将开始`)}`);
-      lines.push(`TRIGGER:-PT${lead}M`);
+      lines.push(`TRIGGER;VALUE=DURATION:-PT${lead}M`);
+      lines.push('ATTACH;VALUE=URI:Basso');
       lines.push('END:VALARM');
     }
     lines.push('END:VEVENT');

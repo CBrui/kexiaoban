@@ -1936,7 +1936,13 @@ const storeApi = require(path.join(M, 'api/store'));
   ok('跳跃周次拆成 2 条', evGap.filter(function (l) { return l === 'BEGIN:VEVENT'; }).length === 2);
 
   const evAlarm = buildEvents(Object.assign({}, courseBase, { weeks: '1-16' }), evOpts);
-  ok('带提前 15 分钟闹钟', evAlarm.indexOf('TRIGGER:-PT15M') !== -1);
+  // ⚠️ 用 ACTION:AUDIO + ATTACH Basso（Apple 原生格式）而非 DISPLAY：
+  // DISPLAY 只弹文本不响铃，iOS 订阅日历会显示成「无提醒」（用户实测反馈）
+  ok('带提前 15 分钟闹钟', evAlarm.indexOf('TRIGGER;VALUE=DURATION:-PT15M') !== -1);
+  ok('闹钟用 AUDIO 动作（DISPLAY 在订阅日历里会显示成无提醒）',
+    evAlarm.indexOf('ACTION:AUDIO') !== -1 && evAlarm.indexOf('ACTION:DISPLAY') === -1);
+  ok('闹钟带默认铃声资源（缺了部分客户端会忽略）',
+    evAlarm.indexOf('ATTACH;VALUE=URI:Basso') !== -1);
   ok('闹钟块成对闭合',
     evAlarm.filter(function (l) { return l === 'BEGIN:VALARM'; }).length ===
     evAlarm.filter(function (l) { return l === 'END:VALARM'; }).length);
