@@ -42,10 +42,17 @@ const COURSES = 'courses';
  * 里能看到实际域名，形如
  *   https://xxxx.service.tcloudbase.com
  *   https://xxxx.ap-shanghai.app.tcloudbase.com
- * 拿到后填到这里（或在云函数环境变量 CALENDAR_FEED_BASE 里配），
- * 小程序端就能直接显示完整订阅链接，用户复制即用。
+ *
+ * 本项目已开通，域名写在下面的 DEFAULT_FEED_BASE 里作为兜底：
+ * 环境变量 CALENDAR_FEED_BASE 优先（换域名 / 换环境时不用改代码重新部署）。
+ *
+ * ⚠️ 换环境或换域名时必须改这里（或配环境变量），否则小程序端拿到的
+ *    订阅链接指向旧域名，用户复制过去拉不到日历。
  */
-const FEED_BASE = process.env.CALENDAR_FEED_BASE || '';
+const DEFAULT_FEED_BASE =
+  'https://kexiaoban-d6gwihpzhf7c3752e-1502280527.ap-shanghai.app.tcloudbase.com';
+
+const FEED_BASE = process.env.CALENDAR_FEED_BASE || DEFAULT_FEED_BASE;
 
 /** HTTP 触发路径（与控制台配置的触发路径保持一致） */
 const FEED_PATH = process.env.CALENDAR_FEED_PATH || '/calendar';
