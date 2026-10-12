@@ -128,12 +128,46 @@ async function ensure(openid, event) {
     });
   }
 
+  /**
+   * 顺带回传「当前订阅的是哪张课表 + 有多少门课」。
+   *
+   * 为什么前端必须显示这个：订阅日历读的是**当前课表**（is_current 优先，
+   * 退化第一张），用户一切换课表，日历刷新后内容会整份换掉。不写出来用户
+   * 只会觉得「课表莫名其妙变了」。课程数则用来当场核对日历里进去了几条 ——
+   * 「只导入 1~2 门」这类问题一眼就能看出来。
+   */
+  const feedOf = await currentTimetableOf(openid);
+
   return ok({
     token,
     url: feedUrl(token),
     feedBaseReady: !!FEED_BASE,
-    reset: !!reset
+    reset: !!reset,
+    timetableName: feedOf ? feedOf.name : '',
+    courseCount: feedOf ? feedOf.courseCount : 0
   });
+}
+
+/**
+ * 取当前课表（is_current 优先，退化到第一张）及其课程数
+ * @returns {Promise<{name: string, courseCount: number} | null>}
+ */
+async function currentTimetableOf(openid) {
+  const tts = await db.collection(TIMETABLES).where({ _openid: openid }).get();
+  const list = (tts && tts.data) || [];
+  const current =
+    list.find((t) => t.is_current === true || t.is_current === 'true') || list[0] || null;
+  if (!current) return null;
+
+  const counted = await db
+    .collection(COURSES)
+    .where({ timetable_id: String(current.id || current._id) })
+    .count();
+
+  return {
+    name: current.name || '未命名课表',
+    courseCount: (counted && counted.total) || 0
+  };
 }
 
 /** 把提醒配置推到云端：静音课程、提前分钟、自定义作息 */

@@ -62,7 +62,12 @@ Page({
     feedLoading: false,
     feedBaseReady: true, // 云函数是否已配好 HTTP 域名（false 时只能拿到 token 没有链接）
     feedGuideOpen: false,
-    feedError: ''
+    feedError: '',
+    // 订阅的是哪张课表 + 多少门课：订阅日历读「当前课表」，切课表内容会整份换，
+    // 不显示出来的话用户只会觉得「课表莫名其妙变了」；课程数用来当场核对日历里进了几条
+    feedTimetableName: '',
+    feedCourseCount: 0,
+    cleanGuideOpen: false // 「日历里已经导入的怎么删」折叠说明
   },
 
   onLoad() {
@@ -360,6 +365,8 @@ Page({
       this.setData({
         feedUrl: r.url || '',
         feedBaseReady: r.feedBaseReady !== false,
+        feedTimetableName: r.timetableName || '',
+        feedCourseCount: Number(r.courseCount) || 0,
         feedLoading: false
       });
       if (!r.url) {
@@ -405,7 +412,12 @@ Page({
     try {
       const r = await feedApi.resetFeed();
       wx.hideLoading();
-      this.setData({ feedUrl: r.url || '', feedLoading: false });
+      this.setData({
+        feedUrl: r.url || '',
+        feedTimetableName: r.timetableName || '',
+        feedCourseCount: Number(r.courseCount) || 0,
+        feedLoading: false
+      });
       wx.showToast({ title: '已生成新链接', icon: 'success' });
     } catch (e) {
       wx.hideLoading();
@@ -415,6 +427,10 @@ Page({
 
   onToggleFeedGuide() {
     this.setData({ feedGuideOpen: !this.data.feedGuideOpen });
+  },
+
+  onToggleCleanGuide() {
+    this.setData({ cleanGuideOpen: !this.data.cleanGuideOpen });
   },
 
   /** 检查/申请日历写入权限 */
