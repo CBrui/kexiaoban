@@ -24,12 +24,13 @@ const DEMO_CALENDAR = [
 ];
 
 const PRIORITY_ROWS = [
-  { order: 1, cond: '法定节假日', result: '不提醒', note: '最高优先级，一律静默' },
-  { order: 2, cond: '自定义不提醒日期', result: '不提醒', note: '如考试周、请假' },
-  { order: 3, cond: '落入免打扰时段', result: '不提醒', note: '如午休 12:00-14:00' },
-  { order: 4, cond: '该课程已单独静音', result: '不提醒', note: '优先于调休补课日：你自己关的课，补课时也不响' },
-  { order: 5, cond: '调休补课日', result: '正常提醒', note: '覆盖「周末不提醒」默认规则' },
-  { order: 6, cond: '其他情况', result: '正常提醒', note: '' }
+  { order: 1, cond: '已全局关闭提醒', result: '不提醒', note: '总开关，最高优先级' },
+  { order: 2, cond: '法定节假日', result: '不提醒', note: '一律静默' },
+  { order: 3, cond: '自定义不提醒日期', result: '不提醒', note: '如考试周、请假' },
+  { order: 4, cond: '落入免打扰时段', result: '不提醒', note: '如午休 12:00-14:00' },
+  { order: 5, cond: '该课程已单独静音', result: '不提醒', note: '优先于调休补课日：你自己关的课，补课时也不响' },
+  { order: 6, cond: '调休补课日', result: '正常提醒', note: '覆盖「周末不提醒」默认规则' },
+  { order: 7, cond: '其他情况', result: '正常提醒', note: '' }
 ];
 
 Page({
