@@ -169,11 +169,89 @@ function buildCalendarPlan(courses, opts) {
   };
 }
 
+/**
+ * 事件去重键
+ *
+ * 微信**没有删除日历事件的 API**，一旦写进去就删不掉。重试同步时若不跳过已写入的，
+ * 日历里就会堆出两份一模一样的课。这里给每条事件一个稳定 key，写入成功后记进 storage，
+ * 下次同步时据此跳过。
+ */
+function eventKey(ev) {
+  if (!ev) return '';
+  return [ev.title || '', ev.startTime || 0, ev.repeatInterval || '', ev.repeatEndTime || 0].join('|');
+}
+
+/**
+ * 判断失败原因是否为「必须在用户点击手势中调用」
+ *
+ * 真机实测踩坑：日历写入 API 要求调用发生在用户点击的同步调用栈里，
+ * 一旦在循环里 `await` 上一条写完再写下一条，后续调用就脱离了手势上下文，
+ * 全部报 `addPhoneRepeatCalendar:fail can only be invoked by user TAP gesture`。
+ * 表现是「第一条成功、后面全失败」。
+ */
+function isGestureError(errMsg) {
+  return /TAP gesture/i.test(String(errMsg || ''));
+}
+
+/**
+ * 同步结果汇总（纯函数，供页面直接渲染）
+ * @param {number} ok    成功条数
+ * @param {Array<{title:string, err:string}>} fails 失败明细
+ * @returns {{level: 'all'|'partial'|'none', text: string}}
+ */
+function summarizeSyncResult(ok, fails) {
+  const list = Array.isArray(fails) ? fails : [];
+  const total = ok + list.length;
+
+  if (!list.length && ok > 0) {
+    return {
+      level: 'all',
+      text: `已写入 ${ok} 条日历事件，课前由手机日历提醒。\n改课后旧事件需在手机日历里手动删除 —— 微信不支持删除日历事件。`
+    };
+  }
+
+  if (ok === 0 && list.length) {
+    const reasons = uniqueReasons(list);
+    const gesture = list.some((f) => isGestureError(f.err));
+    return {
+      level: 'none',
+      text: `一条都没写进去（共 ${total} 条）。\n${reasons}\n\n${
+        gesture
+          ? '提示：日历写入必须在点击后的同步操作中完成，请直接点「同步到手机日历」按钮，不要在弹窗里等待太久。'
+          : '请检查是否授予了日历权限。'
+      }`
+    };
+  }
+
+  if (ok > 0 && list.length) {
+    const reasons = uniqueReasons(list);
+    return {
+      level: 'partial',
+      text: `成功 ${ok} 条，失败 ${list.length} 条。\n${reasons}\n\n再点一次可补写失败的 —— 已写进去的会自动跳过，不会重复。`
+    };
+  }
+
+  return { level: 'none', text: '' };
+}
+
+/** 失败原因去重，最多展示 3 条 */
+function uniqueReasons(fails) {
+  const seen = [];
+  fails.forEach((f) => {
+    const r = String((f && f.err) || '未知错误').trim();
+    if (seen.indexOf(r) === -1) seen.push(r);
+  });
+  return seen.slice(0, 3).map((r) => `· ${r}`).join('\n');
+}
+
 module.exports = {
   buildCalendarPlan,
   planCourse,
   stampOf,
   endOfDayStamp,
   isContinuous,
+  eventKey,
+  isGestureError,
+  summarizeSyncResult,
   MAX_EVENTS
 };

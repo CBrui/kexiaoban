@@ -9,11 +9,13 @@ const { shouldNotifyWithCalendar, buildCalendarIndex } = require('../../logic/dn
 const { listCourses } = require('../../api/course');
 const { withMuted, toggleMute } = require('../../logic/reminder-mute');
 const calendarSync = require('../../logic/calendar-sync');
+const { eventKey, summarizeSyncResult } = calendarSync;
 const timetableApi = require('../../api/timetable');
 const { getRangeTime } = require('../../utils/schedule');
 
 const app = getApp();
 const CONFIG_KEY = 'reminder_config';
+const SYNCED_KEY = 'calendar_synced_keys';   // 已写入系统日历的事件 key（微信删不掉，靠它避免重复堆）
 
 // 演示用的节假日/调休数据（真实项目从云端拉取，内置一份保证离线可用）
 const DEMO_CALENDAR = [
@@ -52,7 +54,8 @@ Page({
     demoResult: '',
     timer: null,
     syncing: false,      // 正在写入系统日历
-    syncResult: ''       // 同步结果反馈（成功条数 / 失败原因）
+    syncResult: '',      // 同步结果反馈（成功条数 / 失败原因）
+    syncedCount: 0       // 本地记录的「已写入日历」事件数
   },
 
   onLoad() {
@@ -215,35 +218,20 @@ Page({
     });
   },
 
+  /**
+   * 同步到手机系统日历
+   *
+   * ⚠️ 顺序是有讲究的：所有 await（授权 / 读库 / 弹窗确认）都必须排在**写入之前**，
+   * 用户点「开始同步」之后一步 await 都不能有，直接进入 writeEvents 同步发起全部调用。
+   *
+   * 真机踩过的坑：日历写入 API 要求调用发生在用户点击手势的调用栈里。
+   * 老写法是「await 写完一条再写下一条」，第一条能成功，后续全部脱离手势上下文，
+   * 报 `can only be invoked by user TAP gesture` —— 表现就是「成功 1 条，失败 5 条」。
+   */
   async onSyncCalendar() {
     if (this.data.syncing) return;
-    const plan = await this.buildSyncPlan();
 
-    if (!plan.events.length) {
-      const why = plan.skipped.length
-        ? `（${plan.skipped[0].reason}）`
-        : '';
-      wx.showToast({ title: `没有可同步的课${why}`, icon: 'none', duration: 2000 });
-      return;
-    }
-
-    // 写入前必须确认：微信没有删除日历事件的 API，这部分是不可逆的
-    const skipLine = plan.skipped.length
-      ? `\n跳过 ${plan.skipped.length} 门（${plan.skipped[0].reason}等）`
-      : '';
-    const truncLine = plan.truncated ? '\n⚠️ 事件过多已截断，建议分批同步' : '';
-    const confirmed = await new Promise((resolve) => {
-      wx.showModal({
-        title: '同步到手机日历',
-        content: `将写入 ${plan.events.length} 条日历事件，提前 ${this.data.config.leadMinutes} 分钟提醒。${skipLine}${truncLine}\n\n注意：微信不支持删除日历事件，改课后旧事件需要你在手机日历里手动删除。`,
-        confirmText: '开始同步',
-        cancelText: '再想想',
-        success: (r) => resolve(r.confirm === true),
-        fail: () => resolve(false)
-      });
-    });
-    if (!confirmed) return;
-
+    // 1) 权限（放最前：首次授权会弹系统框，之后才算真正拿到手势）
     const granted = await this.ensureCalendarScope();
     if (!granted) {
       wx.showModal({
@@ -255,7 +243,82 @@ Page({
       return;
     }
 
-    await this.writeEvents(plan.events);
+    // 2) 算计划（读库，异步，必须在弹窗之前做完）
+    const plan = await this.buildSyncPlan();
+
+    // 3) 剔除本次已经写进去的（微信删不掉，重复写会堆成两份）
+    const done = this.readSyncedKeys();
+    const pending = plan.events.filter((ev) => done.indexOf(eventKey(ev)) === -1);
+    const alreadySynced = plan.events.length - pending.length;
+
+    if (!pending.length) {
+      const why = plan.events.length
+        ? '这些课已经同步过了。'
+        : (plan.skipped.length ? `（${plan.skipped[0].reason}）` : '');
+      wx.showModal({
+        title: '没有需要同步的课',
+        content: `${why}\n\n如果课表改过、想在日历里重写一遍，可以先清空同步记录。`,
+        confirmText: '清空记录',
+        cancelText: '知道了',
+        success: (r) => { if (r.confirm) this.onClearSyncRecord(); }
+      });
+      return;
+    }
+
+    // 4) 确认 —— 微信没有删除日历事件的 API，这一步不可逆，必须讲清楚
+    const skipLine = plan.skipped.length
+      ? `\n跳过 ${plan.skipped.length} 门（${plan.skipped[0].reason}等）`
+      : '';
+    const alreadyLine = alreadySynced
+      ? `\n已同步过的 ${alreadySynced} 条会跳过，不重复写入`
+      : '';
+    const truncLine = plan.truncated ? '\n⚠️ 事件过多已截断，剩余的下次再同步' : '';
+    const confirmed = await new Promise((resolve) => {
+      wx.showModal({
+        title: '同步到手机日历',
+        content: `将写入 ${pending.length} 条日历事件，提前 ${this.data.config.leadMinutes} 分钟提醒。${skipLine}${alreadyLine}${truncLine}\n\n注意：微信不支持删除日历事件，改课后旧事件需要你在手机日历里手动删除。`,
+        confirmText: '开始同步',
+        cancelText: '再想想',
+        success: (r) => resolve(r.confirm === true),
+        fail: () => resolve(false)
+      });
+    });
+    if (!confirmed) return;
+
+    // 5) 立刻写，不能再 await 任何东西
+    this.writeEvents(pending);
+  },
+
+  /** 已写入日历的事件 key 列表（storage） */
+  readSyncedKeys() {
+    try {
+      const v = wx.getStorageSync(SYNCED_KEY);
+      return Array.isArray(v) ? v : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  saveSyncedKeys(keys) {
+    if (!keys.length) return;
+    const list = this.readSyncedKeys();
+    keys.forEach((k) => { if (list.indexOf(k) === -1) list.push(k); });
+    try {
+      wx.setStorageSync(SYNCED_KEY, list);
+    } catch (e) {
+      console.warn('[reminder] 记录已同步事件失败', e);
+    }
+  },
+
+  /** 清空同步记录：课表改过、想在日历里重写一遍时用 */
+  onClearSyncRecord() {
+    try {
+      wx.removeStorageSync(SYNCED_KEY);
+    } catch (e) {
+      console.warn('[reminder] 清空同步记录失败', e);
+    }
+    this.setData({ syncedCount: 0, syncResult: '' });
+    wx.showToast({ title: '已清空，可重新同步', icon: 'none', duration: 2000 });
   },
 
   /** 检查/申请日历写入权限 */
@@ -276,70 +339,78 @@ Page({
     });
   },
 
-  /** 逐条写入：日历 API 一次只能加一条，串行写最稳，失败不中断 */
-  async writeEvents(events) {
+  /**
+   * 写入全部事件 —— **必须同步发起，不能 await**
+   *
+   * 日历 API 要求调用处在用户点击手势的调用栈内。只要在这里 await 上一条的结果，
+   * 后面每条都会脱离手势上下文，全部报 `can only be invoked by user TAP gesture`。
+   * 所以这里用 forEach 一次性把所有 wx 调用发出去（调用是同步发起的，回调异步回来），
+   * 靠计数器收尾。
+   */
+  writeEvents(events) {
     const total = events.length;
     this.setData({ syncing: true, syncResult: '' });
     wx.showLoading({ title: `同步中 0/${total}`, mask: true });
 
     let ok = 0;
-    let failed = 0;
-    let lastErr = '';
+    let done = 0;
+    const fails = [];
+    const written = [];
 
-    for (let i = 0; i < total; i++) {
-      try {
-        await this.writeOne(events[i]);
-        ok++;
-      } catch (e) {
-        failed++;
-        lastErr = (e && e.errMsg) || String(e);
-        console.warn('[reminder] 写入日历失败', events[i].title, e);
-      }
-      wx.showLoading({ title: `同步中 ${ok + failed}/${total}`, mask: true });
-    }
-
-    wx.hideLoading();
-    this.setData({ syncing: false });
-
-    if (failed === 0) {
+    const finish = () => {
+      wx.hideLoading();
+      this.saveSyncedKeys(written);
+      const r = summarizeSyncResult(ok, fails);
       this.setData({
-        syncResult: `已写入 ${ok} 条日历事件，课前会由手机日历提醒。\n如需修改，请在手机日历里删除旧事件后重新同步（微信不支持删除日历）。`
+        syncing: false,
+        syncResult: r.text,
+        syncedCount: this.readSyncedKeys().length
       });
-      wx.showToast({ title: `已同步 ${ok} 条`, icon: 'success' });
-    } else {
-      this.setData({
-        syncResult: `成功 ${ok} 条，失败 ${failed} 条。${lastErr ? '最后失败原因：' + lastErr : ''}`
+      wx.showToast({
+        title: r.level === 'all' ? `已同步 ${ok} 条` : `成功 ${ok} 失败 ${fails.length}`,
+        icon: r.level === 'all' ? 'success' : 'none',
+        duration: 2500
       });
-      wx.showToast({ title: `成功 ${ok} 失败 ${failed}`, icon: 'none', duration: 2500 });
-    }
+    };
+
+    events.forEach((ev) => {
+      this.fireOne(ev, (err) => {
+        if (err) {
+          fails.push({ title: ev.title, err: err });
+          console.warn('[reminder] 写入日历失败', ev.title, err);
+        } else {
+          ok++;
+          written.push(eventKey(ev));
+        }
+        done++;
+        if (done === total) finish();
+        else if (done % 5 === 0) wx.showLoading({ title: `同步中 ${done}/${total}`, mask: true });
+      });
+    });
   },
 
   /** 单条写入：按 kind 选 API，低版本没有重复事件 API 时降级为单条 */
-  writeOne(ev) {
-    return new Promise((resolve, reject) => {
-      const payload = {
-        title: ev.title,
-        startTime: ev.startTime,
-        endTime: ev.endTime,
-        description: ev.description,
-        location: ev.location,
-        alarm: ev.alarm,
-        alarmOffset: ev.alarmOffset,
-        allDay: ev.allDay
-      };
-      const cb = {
-        success: resolve,
-        fail: (e) => reject(e || new Error('写入失败'))
-      };
-      if (ev.kind === 'repeat' && wx.addPhoneRepeatCalendar) {
-        payload.repeatInterval = ev.repeatInterval;
-        payload.repeatEndTime = ev.repeatEndTime;
-        wx.addPhoneRepeatCalendar(Object.assign(payload, cb));
-        return;
-      }
-      // 降级：重复事件 API 不可用时，把重复段的第一条写成普通事件
-      wx.addPhoneCalendar(Object.assign(payload, cb));
-    });
+  fireOne(ev, cb) {
+    const payload = {
+      title: ev.title,
+      startTime: ev.startTime,
+      endTime: ev.endTime,
+      description: ev.description,
+      location: ev.location,
+      alarm: ev.alarm,
+      alarmOffset: ev.alarmOffset,
+      allDay: ev.allDay,
+      success: () => cb(null),
+      fail: (e) => cb((e && e.errMsg) || '写入失败')
+    };
+    if (ev.kind === 'repeat' && wx.addPhoneRepeatCalendar) {
+      payload.repeatInterval = ev.repeatInterval;
+      payload.repeatEndTime = ev.repeatEndTime;
+      wx.addPhoneRepeatCalendar(payload);
+      return;
+    }
+    // 降级：重复事件 API 不可用时，把重复段的第一条写成普通事件
+    wx.addPhoneCalendar(payload);
   },
 
   /* ---------- 判定演示（让「为什么没提醒」可见） ---------- */

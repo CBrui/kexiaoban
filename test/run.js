@@ -45,6 +45,7 @@ const { resolveDateExpr } = require(path.join(M, 'logic/shift-date'));
 const shiftLogic = require(path.join(M, 'logic/course-shift'));
 const { withMuted, toggleMute, slotTextOf } = require(path.join(M, 'logic/reminder-mute'));
 const calendarSync = require(path.join(M, 'logic/calendar-sync'));
+const { eventKey, isGestureError, summarizeSyncResult } = calendarSync;
 
 let passed = 0;
 let failed = 0;
@@ -1819,6 +1820,46 @@ const storeApi = require(path.join(M, 'api/store'));
   const calHuge = calendarSync.buildCalendarPlan(manyCourses, { ...calCtx, maxEvents: 5 });
   ok('超过上限时截断', calHuge.truncated === true);
   ok('截断后事件数不超过上限', calHuge.events.length <= 5, `实际 ${calHuge.events.length}`);
+
+  /* ============ 写入手势约束与结果汇总（真机踩坑回归） ============ */
+  group('【55】日历写入：手势约束 + 去重键 + 结果汇总');
+
+  const GESTURE_ERR = 'addPhoneRepeatCalendar:fail can only be invoked by user TAP gesture';
+
+  ok('识别手势错误', isGestureError(GESTURE_ERR) === true);
+  ok('大小写不敏感', isGestureError('can only be invoked by user tap Gesture.') === true);
+  ok('普通错误不是手势错误', isGestureError('addPhoneRepeatCalendar:fail auth denied') === false);
+  ok('空值不误判', isGestureError('') === false && isGestureError(null) === false);
+
+  const k1 = eventKey({ title: '高等数学', startTime: 1792368000 });
+  const k2 = eventKey({ title: '高等数学', startTime: 1792368000 });
+  const k3 = eventKey({ title: '高等数学', startTime: 1792454400 });
+  const k4 = eventKey({ title: '高等数学', startTime: 1792368000, repeatInterval: 'week' });
+  ok('同一事件 key 稳定（用于跳过已写入的）', k1 === k2 && k1 !== '');
+  ok('时间不同 → key 不同', k1 !== k3);
+  ok('重复规则不同 → key 不同', k1 !== k4);
+  ok('空事件不炸', eventKey(null) === '' && eventKey({}) !== undefined);
+
+  const rAll = summarizeSyncResult(6, []);
+  ok('全部成功 → level=all', rAll.level === 'all');
+  ok('全部成功文案含条数', rAll.text.indexOf('6 条') !== -1);
+  ok('全部成功文案提示删不掉旧事件', rAll.text.indexOf('手动删除') !== -1);
+
+  const rPart = summarizeSyncResult(1, [
+    { title: 'A', err: GESTURE_ERR },
+    { title: 'B', err: GESTURE_ERR }
+  ]);
+  ok('部分成功 → level=partial', rPart.level === 'partial');
+  ok('部分成功文案含成功/失败数', rPart.text.indexOf('成功 1 条') !== -1 && rPart.text.indexOf('失败 2 条') !== -1);
+  ok('部分成功提示可再点一次补写', rPart.text.indexOf('再点一次') !== -1);
+  ok('重复原因只展示一次', rPart.text.split(GESTURE_ERR).length - 1 === 1, rPart.text);
+
+  const rNone = summarizeSyncResult(0, [{ title: 'A', err: GESTURE_ERR }]);
+  ok('一条都没写进去 → level=none', rNone.level === 'none');
+  ok('手势失败给出针对性提示', rNone.text.indexOf('点击') !== -1);
+  const rNone2 = summarizeSyncResult(0, [{ title: 'A', err: 'auth denied' }]);
+  ok('权限失败提示查权限', rNone2.text.indexOf('权限') !== -1);
+  ok('无成功无失败 → 空文案', summarizeSyncResult(0, []).text === '');
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
