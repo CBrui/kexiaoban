@@ -16,6 +16,7 @@ const { getRangeTime } = require('../../utils/schedule');
 const app = getApp();
 const CONFIG_KEY = 'reminder_config';
 const SYNCED_KEY = 'calendar_synced_keys';   // 已写入系统日历的事件 key（微信删不掉，靠它避免重复堆）
+const SYNC_BATCH = 5;                        // 每批写入条数：安卓一次塞十几条会被系统丢掉
 
 // 演示用的节假日/调休数据（真实项目从云端拉取，内置一份保证离线可用）
 const DEMO_CALENDAR = [
@@ -340,17 +341,30 @@ Page({
   },
 
   /**
-   * 写入全部事件 —— **必须同步发起，不能 await**
+   * 分批写入 —— 每批内的调用**同步发起，不能 await**
    *
-   * 日历 API 要求调用处在用户点击手势的调用栈内。只要在这里 await 上一条的结果，
-   * 后面每条都会脱离手势上下文，全部报 `can only be invoked by user TAP gesture`。
-   * 所以这里用 forEach 一次性把所有 wx 调用发出去（调用是同步发起的，回调异步回来），
-   * 靠计数器收尾。
+   * 两条真机约束叠加，决定了只能这么写：
+   *   1. 日历 API 要求调用处在用户点击手势的调用栈内，一旦 await 就丢上下文
+   *      （表现为第 1 条成功、后面全报 `can only be invoked by user TAP gesture`）
+   *   2. 安卓对「一口气并发十几条写入」极不友好 —— 实测只进了 1 条，
+   *      大概率是系统只处理了第一个（其余被丢弃或等待逐个确认）
+   * 所以：每批 SYNC_BATCH 条同步发出，批间用弹窗让用户点「继续」——
+   * 点按钮本身就是新的手势，下一批因此合法。
+   *
+   * ⚠️ 写入期间不能 showLoading：带 mask 的系统遮罩会挡住日历 App 的确认界面。
    */
   writeEvents(events) {
-    const total = events.length;
-    this.setData({ syncing: true, syncResult: '' });
-    wx.showLoading({ title: `同步中 0/${total}`, mask: true });
+    this._syncOk = 0;
+    this.writeBatch(events, 0, events.length, SYNC_BATCH);
+  },
+
+  writeBatch(events, doneCount, total, batchSize) {
+    if (!events || !events.length) return;
+    const size = Math.max(1, batchSize || SYNC_BATCH);
+    const batch = events.slice(0, size);
+    const rest = events.slice(size);
+
+    this.setData({ syncing: true, syncResult: `正在写入 ${doneCount + 1}~${doneCount + batch.length} / 共 ${total} 条…` });
 
     let ok = 0;
     let done = 0;
@@ -358,33 +372,64 @@ Page({
     const written = [];
 
     const finish = () => {
-      wx.hideLoading();
       this.saveSyncedKeys(written);
-      const r = summarizeSyncResult(ok, fails);
+      this._syncOk = (this._syncOk || 0) + ok;
+      const finished = doneCount + batch.length;
+      // 本批失败的重试一次机会：拼到剩余队列最前面（成功的已记 key，不会重复写）
+      const nextRest = fails.map((f) => f.ev).concat(rest);
+      // 自适应批次：一批里只成功了几条，下一批就按几条来；全失败则缩到 1 条
+      const nextSize = ok === 0 ? 1 : Math.max(1, Math.min(ok, size));
+
+      if (!nextRest.length) {
+        const r = summarizeSyncResult(this._syncOk, fails);
+        this.setData({
+          syncing: false,
+          syncResult: r.text,
+          syncedCount: this.readSyncedKeys().length
+        });
+        // 结果必须弹窗：灰字太容易被划掉，而这条信息是排查的唯一依据
+        wx.showModal({
+          title: fails.length ? '同步完成（有失败）' : '同步完成',
+          content: r.text,
+          showCancel: !!fails.length,
+          cancelText: '知道了',
+          confirmText: '重试失败的',
+          success: (m) => { if (m.confirm && fails.length) this.writeBatch(fails.map((f) => f.ev), doneCount + ok, total, nextSize); }
+        });
+        return;
+      }
+
       this.setData({
-        syncing: false,
-        syncResult: r.text,
-        syncedCount: this.readSyncedKeys().length
+        syncResult: `已写入 ${this._syncOk} 条，还剩 ${nextRest.length} 条。\n点「继续」写下一批。`
       });
-      wx.showToast({
-        title: r.level === 'all' ? `已同步 ${ok} 条` : `成功 ${ok} 失败 ${fails.length}`,
-        icon: r.level === 'all' ? 'success' : 'none',
-        duration: 2500
+      wx.showModal({
+        title: '继续同步下一批',
+        content: `已写入 ${this._syncOk} 条，还剩 ${nextRest.length} 条。\n\n安卓一次塞太多条会被系统丢掉，所以分批来 —— 点「继续」写下一批${nextSize < size ? `（本批只成功 ${ok} 条，已自动改为每批 ${nextSize} 条）` : ''}。`,
+        confirmText: '继续',
+        cancelText: '先不了',
+        success: (m) => {
+          if (m.confirm) this.writeBatch(nextRest, finished, total, nextSize);
+          else {
+            this.setData({
+              syncing: false,
+              syncResult: `已暂停：已写入 ${this._syncOk} 条，还剩 ${nextRest.length} 条。下次点同步会从剩下的继续。`
+            });
+          }
+        }
       });
     };
 
-    events.forEach((ev) => {
+    batch.forEach((ev) => {
       this.fireOne(ev, (err) => {
         if (err) {
-          fails.push({ title: ev.title, err: err });
+          fails.push({ title: ev.title, err: err, ev: ev });
           console.warn('[reminder] 写入日历失败', ev.title, err);
         } else {
           ok++;
           written.push(eventKey(ev));
         }
         done++;
-        if (done === total) finish();
-        else if (done % 5 === 0) wx.showLoading({ title: `同步中 ${done}/${total}`, mask: true });
+        if (done === batch.length) finish();
       });
     });
   },
