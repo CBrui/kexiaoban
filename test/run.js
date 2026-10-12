@@ -48,8 +48,8 @@ const calendarSync = require(path.join(M, 'logic/calendar-sync'));
 const { eventKey, isGestureError, summarizeSyncResult } = calendarSync;
 // 订阅日历（云函数内的纯函数层，不依赖 wx-server-sdk，可直接单测）
 const CF = path.resolve(__dirname, '../cloudfunctions/calendarFeed');
-const feedIcs = require(path.join(CF, 'lib/ics'));
-const feedWeek = require(path.join(CF, 'lib/week'));
+const feedIcs = require(path.join(CF, 'ics'));
+const feedWeek = require(path.join(CF, 'week'));
 
 let passed = 0;
 let failed = 0;

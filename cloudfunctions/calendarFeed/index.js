@@ -53,8 +53,20 @@ const FEED_PATH = process.env.CALENDAR_FEED_PATH || '/calendar';
 /** 单次 get 上限：云函数端 100 条，超出静默截断，必须分页拉全量 */
 const PAGE_SIZE = 100;
 
-const { buildIcs } = require('./lib/ics');
-const { DEFAULT_SCHEDULE } = require('./lib/schedule');
+/**
+ * lib 改成**延迟加载**：云函数若加载阶段就崩（子目录没进产物 / 依赖缺失），
+ * 平台只会笼统报 `functions execute fail`，看不出真正原因。放进 main 里 try/catch
+ * 才能把 MODULE_NOT_FOUND 这类信息带回来。
+ */
+let libCache = null;
+function loadLib() {
+  if (libCache) return libCache;
+  libCache = {
+    ics: require('./ics'),
+    schedule: require('./schedule')
+  };
+  return libCache;
+}
 
 const ok = (data) => Object.assign({ ok: true }, data);
 const fail = (error, message) => ({ ok: false, error, message: message || '' });
@@ -208,6 +220,8 @@ async function handleHttp(event) {
   );
 
   const feed = profile.calendar_feed || {};
+  const { buildIcs } = loadLib().ics;
+  const { DEFAULT_SCHEDULE } = loadLib().schedule;
   const result = buildIcs({
     courses: courses || [],
     termStartMonday: current.term_start_monday,
@@ -244,6 +258,13 @@ function isHttpEvent(event) {
 
 exports.main = async (event, context) => {
   const e = event || {};
+
+  try {
+    loadLib();
+  } catch (err) {
+    console.error('[calendarFeed] 加载 lib 失败', err);
+    return textResponse(500, '云函数依赖加载失败：' + ((err && err.message) || err));
+  }
 
   if (isHttpEvent(e)) {
     try {
