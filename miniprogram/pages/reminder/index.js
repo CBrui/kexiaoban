@@ -11,7 +11,8 @@ const { withMuted, toggleMute } = require('../../logic/reminder-mute');
 const calendarSync = require('../../logic/calendar-sync');
 const { eventKey, summarizeSyncResult } = calendarSync;
 const timetableApi = require('../../api/timetable');
-const { getRangeTime } = require('../../utils/schedule');
+const { getRangeTime, getSchedule } = require('../../utils/schedule');
+const feedApi = require('../../api/calendar-feed');
 
 const app = getApp();
 const CONFIG_KEY = 'reminder_config';
@@ -56,7 +57,12 @@ Page({
     timer: null,
     syncing: false,      // 正在写入系统日历
     syncResult: '',      // 同步结果反馈（成功条数 / 失败原因）
-    syncedCount: 0       // 本地记录的「已写入日历」事件数
+    syncedCount: 0,      // 本地记录的「已写入日历」事件数
+    feedUrl: '',         // 订阅链接（云端 .ics 源，手机日历定期来拉）
+    feedLoading: false,
+    feedBaseReady: true, // 云函数是否已配好 HTTP 域名（false 时只能拿到 token 没有链接）
+    feedGuideOpen: false,
+    feedError: ''
   },
 
   onLoad() {
@@ -99,6 +105,26 @@ Page({
     } catch (e) {
       console.error('[reminder] 保存配置失败', e);
     }
+    this.pushFeedConfig();
+  },
+
+  /**
+   * 把提醒配置推一份到云端
+   *
+   * 手机日历来拉 .ics 时没有小程序登录态，云函数只能凭 token 认人，读不到本机
+   * storage。静音课程、提前提醒分钟数、自定义作息这三样只存在本地的话，
+   * 订阅出来的日历就对不上。失败不影响本地提醒，所以静默处理。
+   */
+  pushFeedConfig() {
+    feedApi
+      .syncFeedConfig({
+        silentCourses: this.data.config.silentCourses || [],
+        leadMinutes: this.data.config.leadMinutes,
+        schedule: getSchedule()
+      })
+      .catch((e) => {
+        console.warn('[reminder] 订阅日历配置同步失败（不影响本地提醒判定）', e);
+      });
   },
 
   async loadCourses() {
@@ -320,6 +346,75 @@ Page({
     }
     this.setData({ syncedCount: 0, syncResult: '' });
     wx.showToast({ title: '已清空，可重新同步', icon: 'none', duration: 2000 });
+  },
+
+  /* ---------- 订阅日历（推荐通道：日历主动来拉，不受安卓写入限制） ---------- */
+
+  async onGetFeedUrl() {
+    if (this.data.feedLoading) return;
+    this.setData({ feedLoading: true, feedError: '' });
+    wx.showLoading({ title: '生成中', mask: true });
+    try {
+      const r = await feedApi.ensureFeed(false);
+      wx.hideLoading();
+      this.setData({
+        feedUrl: r.url || '',
+        feedBaseReady: r.feedBaseReady !== false,
+        feedLoading: false
+      });
+      if (!r.url) {
+        this.setData({
+          feedError: '云端还没配置 HTTP 访问域名，暂时拿不到链接。开通后即可自动生成（步骤见 README）。'
+        });
+      }
+    } catch (e) {
+      wx.hideLoading();
+      const msg = (e && e.message) || '生成订阅链接失败';
+      this.setData({ feedLoading: false, feedError: msg });
+      wx.showToast({ title: msg, icon: 'none', duration: 2500 });
+    }
+  },
+
+  onCopyFeedUrl() {
+    const url = this.data.feedUrl;
+    if (!url) return;
+    wx.setClipboardData({
+      data: url,
+      success: () => {
+        wx.showToast({ title: '已复制链接', icon: 'success' });
+        this.setData({ feedGuideOpen: true });
+      }
+    });
+  },
+
+  onResetFeedUrl() {
+    wx.showModal({
+      title: '重新生成订阅链接',
+      content: '旧链接会立刻失效，手机日历里已订阅的将停止更新。确定要换一个吗？',
+      confirmText: '重新生成',
+      cancelText: '再想想',
+      success: (m) => {
+        if (m.confirm) this.doResetFeed();
+      }
+    });
+  },
+
+  async doResetFeed() {
+    this.setData({ feedLoading: true, feedError: '' });
+    wx.showLoading({ title: '生成中', mask: true });
+    try {
+      const r = await feedApi.resetFeed();
+      wx.hideLoading();
+      this.setData({ feedUrl: r.url || '', feedLoading: false });
+      wx.showToast({ title: '已生成新链接', icon: 'success' });
+    } catch (e) {
+      wx.hideLoading();
+      this.setData({ feedLoading: false, feedError: (e && e.message) || '重新生成失败' });
+    }
+  },
+
+  onToggleFeedGuide() {
+    this.setData({ feedGuideOpen: !this.data.feedGuideOpen });
   },
 
   /** 检查/申请日历写入权限 */

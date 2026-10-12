@@ -104,9 +104,44 @@
     <text wx:else class="hint">还没有课程，先去建表</text>
   </view>
 
+  <!-- 订阅日历：推荐通道。日历主动来拉 .ics，不受安卓「一次只吃 1~2 条」的限制 -->
+  <view class="card">
+    <view class="section-title">订阅日历（推荐）</view>
+    <text class="priority-desc">
+      一次订阅，整学期全部节次进手机日历。改课后刷新订阅即生效，不用手动删旧事件。
+    </text>
+    <view class="btn btn-primary submit-btn {{feedLoading ? 'btn-disabled' : ''}}" bindtap="onGetFeedUrl">
+      {{feedLoading ? '生成中…' : (feedUrl ? '重新获取链接' : '获取订阅链接')}}
+    </view>
+
+    <view wx:if="{{feedUrl}}" class="feed-box">
+      <text class="feed-url" user-select="true">{{feedUrl}}</text>
+      <view class="feed-actions">
+        <view class="btn btn-mini" bindtap="onCopyFeedUrl">复制链接</view>
+        <text class="link-btn" bindtap="onResetFeedUrl">重新生成</text>
+      </view>
+    </view>
+
+    <view wx:if="{{feedError}}" class="sync-result">{{feedError}}</view>
+
+    <view class="feed-guide-toggle" bindtap="onToggleFeedGuide">
+      <text>{{feedGuideOpen ? '收起订阅教程' : '怎么添加到手机日历？'}}</text>
+    </view>
+    <view wx:if="{{feedGuideOpen}}" class="feed-guide">
+      <text>1. 先点上面的「复制链接」</text>
+      <text>2. iPhone：设置 → 日历 → 账户 → 添加订阅日历，粘贴链接</text>
+      <text>3. 华为：日历 → 设置 → 账户 → 其他日历 → 通过网址导入</text>
+      <text>4. 小米：日历 → 右上角 + → 订阅日历</text>
+      <text>5. 其他安卓：装 Outlook 或 Google 日历，走「从网络订阅」</text>
+      <text class="hint">
+        订阅不是实时的：改课后 iOS 隔一阵自动刷新，急的话在日历 App 里手动刷新一次。
+      </text>
+    </view>
+  </view>
+
   <!-- 同步到手机日历：小程序没有本地通知能力，课前要真的响只能借这条通道 -->
   <view class="card">
-    <view class="section-title">同步到手机日历</view>
+    <view class="section-title">直接写入手机日历（备用）</view>
     <text class="priority-desc">
       小程序退到后台后没法自己弹通知。把课写进手机自带日历，由日历 App 到点响铃。
     </text>

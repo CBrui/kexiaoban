@@ -46,6 +46,10 @@ const shiftLogic = require(path.join(M, 'logic/course-shift'));
 const { withMuted, toggleMute, slotTextOf } = require(path.join(M, 'logic/reminder-mute'));
 const calendarSync = require(path.join(M, 'logic/calendar-sync'));
 const { eventKey, isGestureError, summarizeSyncResult } = calendarSync;
+// 订阅日历（云函数内的纯函数层，不依赖 wx-server-sdk，可直接单测）
+const CF = path.resolve(__dirname, '../cloudfunctions/calendarFeed');
+const feedIcs = require(path.join(CF, 'lib/ics'));
+const feedWeek = require(path.join(CF, 'lib/week'));
 
 let passed = 0;
 let failed = 0;
@@ -1860,6 +1864,144 @@ const storeApi = require(path.join(M, 'api/store'));
   const rNone2 = summarizeSyncResult(0, [{ title: 'A', err: 'auth denied' }]);
   ok('权限失败提示查权限', rNone2.text.indexOf('权限') !== -1);
   ok('无成功无失败 → 空文案', summarizeSyncResult(0, []).text === '');
+
+  /* ============ 56. 订阅日历 ICS 生成 ============ */
+  group('【56】课表 → ICS 订阅源（calendarFeed）');
+
+  const { splitSegments, escapeText, foldLine, toIcsUtc, buildIcs, buildEvents } = feedIcs;
+
+  /* --- 周次切段：RRULE 的 INTERVAL 是常量，间隔变了就必须拆 --- */
+  const segAll = splitSegments([1, 2, 3, 4]);
+  ok('连续周次 → 合成 1 段', segAll.length === 1 && segAll[0].weeks.length === 4);
+  ok('连续周次 interval=1', segAll[0].interval === 1);
+
+  const segOdd = splitSegments([1, 3, 5, 7]);
+  ok('单周 → 仍是 1 段', segOdd.length === 1 && segOdd[0].weeks.length === 4);
+  ok('单周 interval=2', segOdd[0].interval === 2);
+
+  const segMix = splitSegments([1, 2, 3, 5, 6]);
+  ok('间隔从 1 变 2 → 拆成 2 段', segMix.length === 2);
+  ok('拆段后周次不丢', segMix.reduce((a, s) => a + s.weeks.length, 0) === 5);
+
+  ok('单周只有一周 → 1 段 interval=1', JSON.stringify(splitSegments([5])) === JSON.stringify([{ weeks: [5], interval: 1 }]));
+  ok('空周次 → 无段', splitSegments([]).length === 0);
+  ok('未排序也能正确切段', splitSegments([7, 1, 3, 5])[0].interval === 2);
+
+  /* --- 转义与折行：写错客户端直接解析失败 --- */
+  ok('分号转义', escapeText('a;b') === 'a\\;b');
+  ok('逗号转义', escapeText('a,b') === 'a\\,b');
+  ok('反斜杠先转义（顺序不能反）', escapeText('a\\b') === 'a\\\\b');
+  ok('换行转成 \\n', escapeText('a\nb') === 'a\\nb');
+
+  const longAscii = foldLine('SUMMARY:' + 'A'.repeat(120));
+  ok('超长 ASCII 行被折行', longAscii.indexOf('\r\n ') !== -1);
+  ok('折行后每行不超过 75 字节',
+    longAscii.split('\r\n ').every(function (l) { return Buffer.byteLength(l, 'utf8') <= 75; }));
+
+  const longCn = foldLine('SUMMARY:' + '高等数学'.repeat(20));
+  ok('中文按字节折行而非按字数', longCn.indexOf('\r\n ') !== -1);
+  ok('折行不切断多字节字符', longCn.split('\r\n ').every(function (l) {
+    return Buffer.byteLength(l, 'utf8') <= 75 && l.indexOf('�') === -1;
+  }));
+  ok('短行原样返回', foldLine('VERSION:2.0') === 'VERSION:2.0');
+
+  /* --- 时间换算：云函数时区不保证东八区，必须手工算 UTC --- */
+  ok('早八 → UTC 零点', toIcsUtc('2026-10-19', '08:00') === '20261019T000000Z');
+  ok('下午两点 → UTC 06:00', toIcsUtc('2026-10-19', '14:00') === '20261019T060000Z');
+  ok('晚七点跨日不越界', toIcsUtc('2026-10-19', '19:00') === '20261019T110000Z');
+  ok('非法时间返回空串', toIcsUtc('2026-10-19', '') === '');
+
+  /* --- 单门课生成的事件 --- */
+  const courseBase = {
+    id: 'c1', name: '高等数学', teacher: '张老师', location: '教三 301',
+    day_of_week: 1, start_slot: 1, slot_count: 1
+  };
+  const evOpts = { termStartMonday: '2026-09-07', leadMinutes: 15, dtStamp: '20261012T000000Z' };
+
+  const evAll = buildEvents(Object.assign({}, courseBase, { weeks: '1-16' }), evOpts);
+  ok('1-16 周生成 1 条事件',
+    evAll.filter(function (l) { return l === 'BEGIN:VEVENT'; }).length === 1);
+  ok('DTSTART 落在第 1 周周一 08:00', evAll.indexOf('DTSTART:20260907T000000Z') !== -1, evAll[3]);
+  ok('连堂结束时间按大节算', evAll.indexOf('DTEND:20260907T013500Z') !== -1, evAll[4]);
+  ok('每周重复 RRULE INTERVAL=1 COUNT=16',
+    evAll.indexOf('RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=16') !== -1);
+
+  const evOdd = buildEvents(Object.assign({}, courseBase, { weeks: '1-16单' }), evOpts);
+  ok('单周用 INTERVAL=2 原生表达', evOdd.indexOf('RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=8') !== -1,
+    evOdd.filter(function (l) { return l.indexOf('RRULE') === 0; })[0]);
+  ok('单周不必按周拆成 8 条',
+    evOdd.filter(function (l) { return l === 'BEGIN:VEVENT'; }).length === 1);
+
+  const evGap = buildEvents(Object.assign({}, courseBase, { weeks: '1-4,6-16' }), evOpts);
+  ok('跳跃周次拆成 2 条', evGap.filter(function (l) { return l === 'BEGIN:VEVENT'; }).length === 2);
+
+  const evAlarm = buildEvents(Object.assign({}, courseBase, { weeks: '1-16' }), evOpts);
+  ok('带提前 15 分钟闹钟', evAlarm.indexOf('TRIGGER:-PT15M') !== -1);
+  ok('闹钟块成对闭合',
+    evAlarm.filter(function (l) { return l === 'BEGIN:VALARM'; }).length ===
+    evAlarm.filter(function (l) { return l === 'END:VALARM'; }).length);
+  ok('leadMinutes=0 时不写闹钟',
+    buildEvents(Object.assign({}, courseBase, { weeks: '1-16' }),
+      Object.assign({}, evOpts, { leadMinutes: 0 })).indexOf('VALARM') === -1);
+
+  ok('周次为空的课程不生成事件', buildEvents(Object.assign({}, courseBase, { weeks: '' }), evOpts).length === 0);
+  ok('缺星期不生成事件',
+    buildEvents(Object.assign({}, courseBase, { weeks: '1-16', day_of_week: null }), evOpts).length === 0);
+
+  /* --- 整份 ICS --- */
+  const icsRes = buildIcs({
+    courses: [
+      Object.assign({}, courseBase, { id: 'c1', weeks: '1-16' }),
+      Object.assign({}, courseBase, { id: 'c2', name: '大学物理', weeks: '1-16单', day_of_week: 3 })
+    ],
+    termStartMonday: '2026-09-07',
+    leadMinutes: 15,
+    now: new Date(Date.UTC(2026, 9, 12))
+  });
+  ok('以 VCALENDAR 开头结尾',
+    icsRes.ics.indexOf('BEGIN:VCALENDAR') === 0 && icsRes.ics.trim().endsWith('END:VCALENDAR'));
+  ok('事件数统计正确', icsRes.eventCount === 2, String(icsRes.eventCount));
+  ok('声明了日历名', icsRes.ics.indexOf('X-WR-CALNAME') !== -1);
+  ok('VEVENT 与 END:VEVENT 数量一致',
+    icsRes.ics.split('BEGIN:VEVENT').length === icsRes.ics.split('END:VEVENT').length);
+
+  const icsSilent = buildIcs({
+    courses: [
+      Object.assign({}, courseBase, { id: 'c1', weeks: '1-16' }),
+      Object.assign({}, courseBase, { id: 'c2', name: '大学物理', weeks: '1-16' })
+    ],
+    termStartMonday: '2026-09-07',
+    silentCourses: ['c1'],
+    now: new Date(Date.UTC(2026, 9, 12))
+  });
+  ok('静音的课不写进订阅源', icsSilent.eventCount === 1);
+  ok('跳过的课记进 skipped', icsSilent.skipped.length === 1 && icsSilent.skipped[0].name === '高等数学');
+
+  const uid1 = buildIcs({ courses: [Object.assign({}, courseBase, { weeks: '1-16' })], termStartMonday: '2026-09-07', now: new Date(Date.UTC(2026, 9, 12)) });
+  const uid2 = buildIcs({ courses: [Object.assign({}, courseBase, { weeks: '1-16' })], termStartMonday: '2026-09-07', now: new Date(Date.UTC(2026, 11, 1)) });
+  const uidOf = function (ics) {
+    const m = ics.ics.match(/UID:([^\r\n]+)/);
+    return m ? m[1] : '';
+  };
+  ok('UID 跨生成稳定（客户端靠它判断更新还是新增）', uidOf(uid1) === uidOf(uid2) && uidOf(uid1) !== '');
+  ok('DTSTAMP 随生成时间变化', uid1.ics.indexOf('DTSTAMP:20261012T') !== -1 && uid2.ics.indexOf('DTSTAMP:20261201T') !== -1);
+
+  /* --- 云函数内的 week 复刻版必须与小程序版行为一致 --- */
+  const weekCases = ['1-16', '1-16单', '1-16 双', '3,5,7', '1-8,10-16', '1-16单,17-18', '第1-16周', '单周', '双周', '1—16', '1～16', '', 'abc'];
+  const weekDrift = weekCases.filter(function (t) {
+    return JSON.stringify(feedWeek.parseWeeks(t)) !== JSON.stringify(parseWeeks(t));
+  });
+  ok('parseWeeks 复刻版与小程序版完全一致', weekDrift.length === 0, '漂移：' + weekDrift.join(' / '));
+
+  const dateDrift = [];
+  [[1, 1], [5, 6], [16, 7], [20, 3]].forEach(function (pair) {
+    const mini = formatDate(weekToDate('2026-09-07', pair[0], pair[1]));
+    const feed = feedWeek.weekToDateStr('2026-09-07', pair[0], pair[1]);
+    if (mini !== feed) dateDrift.push(`第${pair[0]}周星期${pair[1]}: ${mini} vs ${feed}`);
+  });
+  ok('weekToDate 复刻版与小程序版结果一致', dateDrift.length === 0, dateDrift.join(' / '));
+  ok('第 1 周周一就是学期起始日', feedWeek.weekToDateStr('2026-09-07', 1, 1) === '2026-09-07');
+  ok('第 5 周周六换算正确', feedWeek.weekToDateStr('2026-09-07', 5, 6) === '2026-10-10');
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
