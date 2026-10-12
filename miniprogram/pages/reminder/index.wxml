@@ -114,6 +114,10 @@
       {{syncing ? '同步中…' : '一键同步到系统日历'}}
     </view>
     <view wx:if="{{syncResult}}" class="sync-result">{{syncResult}}</view>
+    <view wx:if="{{syncedCount}}" class="sync-row">
+      <text class="hint">本地已记录 {{syncedCount}} 条，重复同步会自动跳过</text>
+      <text class="link-btn" bindtap="onClearSyncRecord">清空记录</text>
+    </view>
     <text class="hint">
       已静音的课不会写入 · 已上完的课自动跳过 · 微信不支持删除日历事件，改课后请在手机日历里删除旧事件再重新同步
     </text>
