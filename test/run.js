@@ -43,6 +43,8 @@ const schedule = require(path.join(M, 'utils/schedule'));
 const { normalizeProfile } = require(path.join(M, 'api/profile'));
 const { resolveDateExpr } = require(path.join(M, 'logic/shift-date'));
 const shiftLogic = require(path.join(M, 'logic/course-shift'));
+const { withMuted, toggleMute, slotTextOf } = require(path.join(M, 'logic/reminder-mute'));
+const calendarSync = require(path.join(M, 'logic/calendar-sync'));
 
 let passed = 0;
 let failed = 0;
@@ -177,17 +179,17 @@ ok('自定义不提醒日期 → 不提醒',
 ok('落入免打扰时段 → 不提醒',
   shouldNotify({ ...baseCtx, timeStr: '12:30', userConfig: { ...baseCfg, silentRanges: [{ from: '12:00', to: '14:00' }] } }).notify === false);
 
-ok('调休补课日 → 正常提醒',
-  shouldNotify({ ...baseCtx, isMakeupWorkday: true }).notify === true);
-
 ok('该课程静音 → 不提醒',
   shouldNotify({ ...baseCtx, userConfig: { ...baseCfg, silentCourses: [1] } }).notify === false);
+
+ok('调休补课日 → 正常提醒',
+  shouldNotify({ ...baseCtx, isMakeupWorkday: true }).notify === true);
 
 ok('全局关闭 → 不提醒',
   shouldNotify({ ...baseCtx, userConfig: { ...baseCfg, globalMute: true } }).notify === false);
 
 /* ============ 11. 优先级冲突（最高风险点） ============ */
-group('【11】优先级冲突 —— 第 1 步 vs 第 4 步');
+group('【11】优先级冲突 —— 静音 vs 调休 / 节假日 vs 调休');
 // 场景：调休补课日，但用户同时设置了该日不提醒 → 应按第 2 步静默
 const r1 = shouldNotify({
   date: '2026-09-27',
@@ -219,6 +221,34 @@ const r3 = shouldNotify({
   course: { id: 1 }
 });
 ok('节假日与调休同时标记 → 节假日优先静默', r3.notify === false, r3.reason);
+
+// 场景：调休补课日 + 该课程已被单独静音 → 静音优先（2026-10-12 修正）
+// 「调休补课日正常提醒」只负责覆盖「周末不提醒」这条默认规则，
+// 不能反过来把用户自己关掉的课重新打开。
+const r4 = shouldNotify({
+  date: '2026-09-27',
+  timeStr: '09:45',
+  isMakeupWorkday: true,
+  userConfig: { ...baseCfg, silentCourses: [1] },
+  course: { id: 1 }
+});
+ok('调休日 + 该课已静音 → 静音优先不提醒', r4.notify === false, r4.reason);
+
+// 同一天：静音的是 A 课，调休日照常提醒的应该是 B 课
+const r5 = shouldNotify({
+  date: '2026-09-27',
+  timeStr: '09:45',
+  isMakeupWorkday: true,
+  userConfig: { ...baseCfg, silentCourses: [1] },
+  course: { id: 2 }
+});
+ok('调休日 + 未静音的另一门课 → 正常提醒', r5.notify === true, r5.reason);
+
+// id 类型差异：云课程 _id 是字符串、本地 id 是数字，判定层必须互认
+ok('静音列表数字 id 命中字符串 course.id',
+  shouldNotify({ ...baseCtx, course: { id: '7' }, userConfig: { ...baseCfg, silentCourses: [7] } }).notify === false);
+ok('静音列表字符串 id 命中数字 course.id',
+  shouldNotify({ ...baseCtx, course: { id: 7 }, userConfig: { ...baseCfg, silentCourses: ['7'] } }).notify === false);
 
 /* ============ 12. 日历索引判定 ============ */
 group('【12】结合日历索引判定');
@@ -1653,6 +1683,142 @@ const storeApi = require(path.join(M, 'api/store'));
     const gotHuge = await fetchAll(qHuge, { pageSize: 20, max: 60 });
     ok('总量上限生效（不无限分页）', gotHuge.length >= 60 && gotHuge.length <= 80, `实际 ${gotHuge.length}`);
   }
+
+  /* ============ 【53】单课程提醒静音状态 reminder-mute ============ */
+  // 这组存在的理由：WXML 模板里不能用 indexOf 之类的方法调用，
+  // 静音态必须在 JS 里算成布尔字段。这里把「算」的过程钉死，
+  // 免得有人图省事把判断写回模板，开关又变成点了没反应。
+  group('【53】单课程提醒静音 withMuted / toggleMute');
+  const courses53 = [
+    { id: 'a1', name: '高等数学', day_of_week: 1, start_slot: 1, slot_count: 2 },
+    { id: 'a2', name: '大学物理', day_of_week: 3, start_slot: 3, slot_count: 1 },
+    { id: 'a3', name: '大学物理', day_of_week: 5, start_slot: 5, slot_count: 1 }
+  ];
+
+  const none53 = withMuted(courses53, []);
+  ok('没有静音项时全部为 false', none53.every((c) => c.muted === false));
+  ok('生成同名课程的区分文案', none53[1].slotText === '周三 第3节' && none53[2].slotText === '周五 第5节');
+  eq('连堂文案带节次区间', none53[0].slotText, '周一 第1-2节');
+
+  const some53 = withMuted(courses53, ['a2']);
+  eq('被静音的课 muted = true', some53[1].muted, true);
+  ok('未静音的课不受影响', some53[0].muted === false && some53[2].muted === false);
+  ok('不修改入参数组', courses53[1].muted === undefined);
+
+  // id 类型差异：云课程 _id 是字符串、本地是数字，混用时最容易静默匹配失败
+  ok('数字 id 课程能被字符串静音列表命中', withMuted([{ id: 7 }], ['7'])[0].muted === true);
+  ok('字符串 id 课程能被数字静音列表命中', withMuted([{ id: '7' }], [7])[0].muted === true);
+  ok('空静音列表不误伤', withMuted([{ id: 'x' }], [])[0].muted === false);
+  ok('静音列表缺省（undefined）不崩溃', withMuted([{ id: 'x' }], undefined)[0].muted === false);
+  ok('课程缺 id 时不静音（避免全局误伤）', withMuted([{ name: '无 id' }], ['x'])[0].muted === false);
+
+  const rt1 = toggleMute([], 'a1');
+  ok('首次切换 → 加入静音', rt1.list.length === 1 && rt1.list[0] === 'a1' && rt1.muted === true);
+  const rt2 = toggleMute(rt1.list, 'a1');
+  ok('再次切换 → 移出静音', rt2.list.length === 0 && rt2.muted === false);
+  const rt3 = toggleMute(rt1.list, 'a2');
+  ok('切换别的课 → 两门都在静音列表', rt3.list.length === 2 && rt3.muted === true);
+  ok('toggleMute 不修改入参', rt1.list.length === 1);
+  ok('数字 id 与字符串 id 互认（toggle）', toggleMute([7], '7').list.length === 0);
+
+  // 页面真实链路：toggle 后再渲染，选中态必须跟着变（这正是开关点不动的那条路径）
+  const afterToggle = withMuted(courses53, toggleMute([], 'a3').list);
+  eq('toggle 后重算 → 该课选中态为 true', afterToggle[2].muted, true);
+  ok('toggle 后重算 → 其他课仍为 false',
+    afterToggle[0].muted === false && afterToggle[1].muted === false);
+  const backAgain = withMuted(courses53, toggleMute(['a3'], 'a3').list);
+  eq('再 toggle 回来 → 选中态为 false', backAgain[2].muted, false);
+
+  /* ============ 【54】课表 → 系统日历同步 ============ */
+  // 这组钉的是「课前提醒怎么用系统日历落地」的映射规则：
+  // 每周重复的课折叠成 1 条、单双周只能按周各写 1 条、静音的课不写、
+  // 上完的课自动跳过。规则错了用户手机上就是一堆杂乱的日历事件。
+  group('【54】课表 → 系统日历 calendar-sync');
+  const TERM = '2026-09-07';
+  // 固定「现在」到第 1 周之前，保证所有周次都还没上
+  const nowCal = new Date(2026, 8, 1, 0, 0, 0); // 2026-09-01
+  const rangeTimeCal = (slot, count) => {
+    // 与 utils/schedule 的真实作息一致：第1节 08:00-09:35，连堂 08:00-11:30
+    if (slot === 1) return count > 1 ? { start: '08:00', end: '11:30' } : { start: '08:00', end: '09:35' };
+    if (slot === 3) return { start: '14:00', end: '15:35' };
+    if (slot === 5) return { start: '19:00', end: '20:35' };
+    return null;
+  };
+
+  const calCtx = { termStartMonday: TERM, leadMinutes: 15, now: nowCal, rangeTime: rangeTimeCal };
+
+  const calWeekly = calendarSync.planCourse(
+    { id: 'c1', name: '高等数学', teacher: '王老师', location: 'A301', day_of_week: 1, start_slot: 1, slot_count: 2, weeks: '1-16' },
+    calCtx
+  );
+  eq('每周都上的课折叠成 1 条重复事件', calWeekly.events.length, 1);
+  eq('用 week 重复', calWeekly.events[0].kind, 'repeat');
+  eq('重复周期取值', calWeekly.events[0].repeatInterval, 'week');
+  eq('提前量换算成秒（15 分钟）', calWeekly.events[0].alarmOffset, 900);
+  ok('开启响铃', calWeekly.events[0].alarm === true);
+  ok('标题是课程名', calWeekly.events[0].title === '高等数学');
+  ok('教师地点写进备注', calWeekly.events[0].description.indexOf('王老师') !== -1);
+  // 第1周周一 08:00 的时间戳
+  eq('起点是第 1 周周一 08:00', calWeekly.events[0].startTime, Math.floor(new Date(2026, 8, 7, 8, 0, 0).getTime() / 1000));
+  eq('连堂结束时间取到末节', calWeekly.events[0].endTime, Math.floor(new Date(2026, 8, 7, 11, 30, 0).getTime() / 1000));
+  // repeatEndTime 应为第 16 周周一当天 23:59:59
+  eq('重复截止到第 16 周当天结束',
+    calWeekly.events[0].repeatEndTime, Math.floor(new Date(2026, 11, 21, 23, 59, 59).getTime() / 1000));
+
+  const calOdd = calendarSync.planCourse(
+    { id: 'c2', name: '大学物理', day_of_week: 3, start_slot: 3, weeks: '1-16 单' },
+    calCtx
+  );
+  eq('单周课按周各写一条（16 周 → 8 条）', calOdd.events.length, 8);
+  eq('单周课用单条事件', calOdd.events[0].kind, 'single');
+  ok('单周课不误加 repeatInterval', calOdd.events[0].repeatInterval === undefined);
+
+  const calJump = calendarSync.planCourse(
+    { id: 'c3', name: '英语', day_of_week: 5, start_slot: 5, weeks: '1-8,10-16' },
+    calCtx
+  );
+  eq('跳跃周次拆成单条事件', calJump.events.length, 15);
+  eq('跳跃段也标记为 single', calJump.events[0].kind, 'single');
+
+  // 已上完的课：参照时间放到学期结束后，应整门跳过而不是写出一堆过去事件
+  const calPast = calendarSync.planCourse(
+    { id: 'c4', name: '上完了的课', day_of_week: 1, start_slot: 1, weeks: '1-4' },
+    { ...calCtx, now: new Date(2026, 11, 30, 0, 0, 0) }
+  );
+  eq('全部上完的课不写入', calPast.events.length, 0);
+  ok('给出跳过原因', !!calPast.reason, calPast.reason);
+
+  // 部分过去的课：只保留还没上的部分
+  const calPartial = calendarSync.planCourse(
+    { id: 'c5', name: '过半的课', day_of_week: 1, start_slot: 1, weeks: '1-8' },
+    { ...calCtx, now: new Date(2026, 9, 1, 0, 0, 0) } // 10-01，第 4 周左右
+  );
+  ok('只写未来的部分', calPartial.events.length > 0 && calPartial.events.length < 8, `实际 ${calPartial.events.length} 条`);
+
+  ok('周次为空 → 跳过', calendarSync.planCourse({ id: 'c6', weeks: '', day_of_week: 1, start_slot: 1 }, calCtx).reason !== undefined);
+  ok('缺星期 → 跳过', calendarSync.planCourse({ id: 'c7', weeks: '1-8', start_slot: 1 }, calCtx).reason !== undefined);
+  ok('取不到节次时间 → 跳过',
+    calendarSync.planCourse({ id: 'c8', weeks: '1-8', day_of_week: 1, start_slot: 99 }, calCtx).reason !== undefined);
+
+  const calPlan = calendarSync.buildCalendarPlan(
+    [
+      { id: 'm1', name: '静音课', day_of_week: 1, start_slot: 1, weeks: '1-16' },
+      { id: 'm2', name: '正常课', day_of_week: 3, start_slot: 3, weeks: '1-16' },
+      { id: 'm3', name: '没周次', day_of_week: 5, start_slot: 5, weeks: '' }
+    ],
+    { ...calCtx, silentCourses: ['m1'] }
+  );
+  eq('静音的课不写入日历', calPlan.events.length, 1);
+  eq('写入的是没被静音的那门', calPlan.events[0].title, '正常课');
+  eq('跳过项被记录', calPlan.skipped.length, 2);
+  ok('跳过原因含静音说明', calPlan.skipped[0].reason.indexOf('关闭提醒') !== -1, calPlan.skipped[0].reason);
+
+  // 安全阀：课特别多时不能无上限往日历里灌
+  const manyCourses = [];
+  for (let i = 0; i < 40; i++) manyCourses.push({ id: 'x' + i, name: '课' + i, day_of_week: 1, start_slot: 1, weeks: '1-16' });
+  const calHuge = calendarSync.buildCalendarPlan(manyCourses, { ...calCtx, maxEvents: 5 });
+  ok('超过上限时截断', calHuge.truncated === true);
+  ok('截断后事件数不超过上限', calHuge.events.length <= 5, `实际 ${calHuge.events.length}`);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));
