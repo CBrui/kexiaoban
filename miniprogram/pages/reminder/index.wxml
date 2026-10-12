@@ -86,9 +86,14 @@
     <view class="section-title">单课程提醒开关</view>
     <view wx:if="{{courses.length}}">
       <view class="course-row" wx:for="{{courses}}" wx:key="id">
-        <text class="course-row-name">{{item.name}}</text>
+        <view class="course-row-main">
+          <text class="course-row-name">{{item.name}}</text>
+          <text wx:if="{{item.slotText}}" class="course-row-sub">{{item.slotText}}</text>
+        </view>
+        <!-- checked 必须用 JS 预算好的 item.muted：
+             WXML 数据绑定不支持方法调用，写在模板里的 indexOf 不会生效 -->
         <switch
-          checked="{{config.silentCourses.indexOf(item.id) !== -1}}"
+          checked="{{item.muted}}"
           color="#3a7afe"
           data-id="{{item.id}}"
           bindchange="onToggleCourseMute"
@@ -97,6 +102,21 @@
       <text class="hint">开启 = 该课程静音</text>
     </view>
     <text wx:else class="hint">还没有课程，先去建表</text>
+  </view>
+
+  <!-- 同步到手机日历：小程序没有本地通知能力，课前要真的响只能借这条通道 -->
+  <view class="card">
+    <view class="section-title">同步到手机日历</view>
+    <text class="priority-desc">
+      小程序退到后台后没法自己弹通知。把课写进手机自带日历，由日历 App 到点响铃。
+    </text>
+    <view class="btn btn-primary submit-btn {{syncing ? 'btn-disabled' : ''}}" bindtap="onSyncCalendar">
+      {{syncing ? '同步中…' : '一键同步到系统日历'}}
+    </view>
+    <view wx:if="{{syncResult}}" class="sync-result">{{syncResult}}</view>
+    <text class="hint">
+      已静音的课不会写入 · 已上完的课自动跳过 · 微信不支持删除日历事件，改课后请在手机日历里删除旧事件再重新同步
+    </text>
   </view>
 
   <!-- 判定演示 -->

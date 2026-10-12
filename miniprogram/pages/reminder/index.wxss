@@ -169,9 +169,34 @@
   border-bottom: 1rpx solid var(--color-border);
 }
 
+.course-row-main {
+  flex: 1;
+  min-width: 0;
+  padding-right: 20rpx;
+}
+
 .course-row-name {
+  display: block;
   font-size: 28rpx;
   color: var(--color-text);
+}
+
+.course-row-sub {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: var(--color-text-secondary);
+}
+
+.sync-result {
+  margin-top: 20rpx;
+  padding: 20rpx;
+  background: var(--color-surface-alt, #f5f6f8);
+  border-radius: 12rpx;
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
 }
 
 /* ---------- 演示 ---------- */

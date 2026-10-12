@@ -8,13 +8,19 @@
  *   1. 该日为法定节假日        → 不提醒（最高优先级）
  *   2. 该日为用户自定义不提醒日期 → 不提醒
  *   3. 提醒时刻落入免打扰时间段  → 不提醒
- *   4. 该日为调休补课日        → 正常提醒（覆盖「周末不提醒」默认规则）
- *   5. 该门课已单独关闭提醒      → 不提醒
+ *   4. 该门课已单独关闭提醒      → 不提醒
+ *   5. 该日为调休补课日        → 正常提醒（覆盖「周末不提醒」默认规则）
  *   6. 其他情况                → 正常提醒
  *
- * 核心风险：第 1 步与第 4 步的顺序。调休意味着「某个周六要上周一的课」
+ * 核心风险一：第 1 步与第 5 步的顺序。调休意味着「某个周六要上周一的课」
  * 与「某个工作日在放长假」会同时存在，必须依靠日期精确匹配，
  * 禁止用「周末 / 工作日」的粗粒度规则替代。
+ *
+ * 核心风险二（2026-10-12 修正）：第 4 步「单课程静音」必须在第 5 步
+ * 「调休补课日」之前。用户单独关掉某门课是**针对具体课程的明确意图**，
+ * 而「调休补课日正常提醒」只是用来覆盖「周末不提醒」这条默认规则，
+ * 不应该反过来把用户自己关掉的课重新打开。改之前的表现：
+ * 用户把周六的补课本周静音了，一到调休日照响不误。
  */
 
 /**
@@ -61,14 +67,16 @@ function shouldNotify(ctx) {
     return { notify: false, reason: '该时刻在你的免打扰时段内' };
   }
 
-  // 4. 调休补课日 —— 覆盖「周末不提醒」的默认规则
-  if (ctx.isMakeupWorkday) return { notify: true, reason: '调休补课日，正常提醒' };
-
-  // 5. 单课程静默
+  // 4. 单课程静默 —— 早于调休补课日判定：用户单独关的课，任何日子都不响。
+  //    id 比较统一成字符串：云课程 _id 是字符串、本地 id 是数字，不做归一化会漏判。
   const courseId = ctx.course && ctx.course.id;
-  if (Array.isArray(cfg.silentCourses) && courseId != null && cfg.silentCourses.indexOf(courseId) !== -1) {
+  if (Array.isArray(cfg.silentCourses) && courseId != null &&
+      cfg.silentCourses.map((x) => String(x)).indexOf(String(courseId)) !== -1) {
     return { notify: false, reason: '该课程已单独关闭提醒' };
   }
+
+  // 5. 调休补课日 —— 覆盖「周末不提醒」的默认规则（不覆盖用户的单课程静音）
+  if (ctx.isMakeupWorkday) return { notify: true, reason: '调休补课日，正常提醒' };
 
   // 6. 正常提醒
   return { notify: true, reason: '正常提醒' };
