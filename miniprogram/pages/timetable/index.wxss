@@ -712,4 +712,9 @@
     background: #3d1a1a;
     color: #ff8a8a;
   }
+
+  /* 假期列的淡化底：浅色用 3% 黑，深色下黑叠黑看不见，换成 5% 白 */
+  .day-col-holiday {
+    background: rgba(255, 255, 255, 0.05);
+  }
 }

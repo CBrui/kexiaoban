@@ -231,7 +231,7 @@
 .feed-meta {
   margin-bottom: 16rpx;
   padding-bottom: 16rpx;
-  border-bottom: 1rpx solid var(--color-border-tertiary, rgba(0, 0, 0, 0.08));
+  border-bottom: 1rpx solid var(--color-border);
 }
 
 .feed-meta-label {
