@@ -45,9 +45,18 @@ const fail = (error) => ({ ok: false, error: String(error) });
 
 /**
  * 播种：仅在集合为空时执行，已有数据绝不覆盖（管理员在控制台改过的数据要保住）
+ * 集合不存在时先建集合再播种 —— 云函数是 admin 权限，可以直接 createCollection，
+ * 这样部署后真正零手工步骤
  */
 async function seedIfEmpty() {
-  const existing = await fetchAll();
+  let existing;
+  try {
+    existing = await fetchAll();
+  } catch (e) {
+    if (!isCollectionMissing(e)) throw e;
+    await db.createCollection(COLLECTION);
+    existing = [];
+  }
   if (existing.length) return { seeded: false, count: existing.length };
 
   for (const r of SEED_RECORDS) {
@@ -65,15 +74,27 @@ async function seedIfEmpty() {
   return { seeded: true, count: SEED_RECORDS.length };
 }
 
+/** 集合不存在的错误特征（-502005 / collection not exists） */
+function isCollectionMissing(e) {
+  const msg = String((e && e.message) || e);
+  return msg.indexOf('-502005') !== -1 || msg.indexOf('collection not exists') !== -1;
+}
+
 async function getHolidays() {
   let seedInfo = { seeded: false, count: 0 };
   try {
     seedInfo = await seedIfEmpty();
   } catch (e) {
-    // 播种失败（多半是集合还没建）不致命：下面照常读，读不到就返回空，客户端用内置表
+    // 播种失败不致命：下面照常读，读不到就返回空，客户端用内置表
   }
 
-  const records = await fetchAll();
+  let records = [];
+  try {
+    records = await fetchAll();
+  } catch (e) {
+    if (!isCollectionMissing(e)) throw e;
+    // 集合建不出来（极端情况）→ 空表，客户端静默降级内置表
+  }
   const list = records
     .filter((r) => r && r.date)
     .map((r) => ({
