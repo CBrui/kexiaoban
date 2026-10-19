@@ -219,6 +219,97 @@
   color: var(--color-primary);
 }
 
+/* ---------- 订阅日历 ---------- */
+.feed-box {
+  margin-top: 20rpx;
+  padding: 20rpx;
+  background: var(--color-surface-alt, #f5f6f8);
+  border-radius: 12rpx;
+}
+
+/* 当前订阅的课表名：切课表会让订阅内容整份变，必须让用户看得见 */
+.feed-meta {
+  margin-bottom: 16rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 1rpx solid var(--color-border-tertiary, rgba(0, 0, 0, 0.08));
+}
+
+.feed-meta-label {
+  display: inline-block;
+  margin-right: 12rpx;
+  padding: 4rpx 16rpx;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  vertical-align: middle;
+}
+
+.feed-meta-name {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: var(--color-text);
+  vertical-align: middle;
+}
+
+.feed-meta .hint {
+  display: block;
+  margin-top: 12rpx;
+}
+
+.feed-url {
+  display: block;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  word-break: break-all;
+}
+
+.feed-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16rpx;
+}
+
+.btn-mini {
+  padding: 12rpx 32rpx;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+}
+
+.feed-guide-toggle {
+  margin-top: 20rpx;
+  font-size: 26rpx;
+  color: var(--color-primary);
+}
+
+.feed-guide {
+  margin-top: 12rpx;
+  padding-left: 8rpx;
+  border-left: 4rpx solid var(--color-border-tertiary, rgba(0, 0, 0, 0.08));
+}
+
+.feed-guide text {
+  display: block;
+  font-size: 24rpx;
+  line-height: 1.8;
+  color: var(--color-text-secondary);
+}
+
+/* 清理说明里的小标题，把「订阅的」和「直接写入的」两组步骤分开 */
+.feed-guide .guide-title {
+  margin-top: 16rpx;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.feed-guide .guide-title:first-child {
+  margin-top: 0;
+}
+
 /* ---------- 演示 ---------- */
 .demo-actions {
   display: flex;

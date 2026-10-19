@@ -1,0 +1,9 @@
+{
+  "name": "calendarFeed",
+  "version": "1.0.0",
+  "description": "课表订阅日历：生成 .ics 源供手机日历订阅（HTTP 访问服务拉取），同时提供 token 生成/重置与提醒配置同步",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

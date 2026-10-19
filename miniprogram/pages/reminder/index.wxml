@@ -104,9 +104,56 @@
     <text wx:else class="hint">还没有课程，先去建表</text>
   </view>
 
+  <!-- 订阅日历：推荐通道。日历主动来拉 .ics，不受安卓「一次只吃 1~2 条」的限制 -->
+  <view class="card">
+    <view class="section-title">订阅日历（推荐）</view>
+    <text class="priority-desc">
+      一次订阅，整学期全部节次进手机日历。改课后刷新订阅即生效，不用手动删旧事件。
+    </text>
+    <view class="btn btn-primary submit-btn {{feedLoading ? 'btn-disabled' : ''}}" bindtap="onGetFeedUrl">
+      {{feedLoading ? '生成中…' : (feedUrl ? '重新获取链接' : '获取订阅链接')}}
+    </view>
+
+    <view wx:if="{{feedUrl}}" class="feed-box">
+      <!-- 订阅的是「当前课表」，切课表内容会整份换，必须写明是哪张 -->
+      <view wx:if="{{feedTimetableName}}" class="feed-meta">
+        <text class="feed-meta-label">当前订阅</text>
+        <text class="feed-meta-name">{{feedTimetableName}} · {{feedCourseCount}} 门课</text>
+        <text class="hint">
+          订阅的是「当前课表」。切换课表后刷新日历，内容会整份换成新课表；
+          日历里的课程数应与此处的 {{feedCourseCount}} 一致，对不上就是漏了。
+        </text>
+      </view>
+      <text class="feed-url" user-select="true">{{feedUrl}}</text>
+      <view class="feed-actions">
+        <view class="btn btn-mini" bindtap="onCopyFeedUrl">复制链接</view>
+        <text class="link-btn" bindtap="onResetFeedUrl">重新生成</text>
+      </view>
+      <text class="hint">
+        法定节假日自动跳过（放假那天不生成事件，调休上班日照常），改课后在日历里手动刷新一次。
+      </text>
+    </view>
+
+    <view wx:if="{{feedError}}" class="sync-result">{{feedError}}</view>
+
+    <view class="feed-guide-toggle" bindtap="onToggleFeedGuide">
+      <text>{{feedGuideOpen ? '收起订阅教程' : '怎么添加到手机日历？'}}</text>
+    </view>
+    <view wx:if="{{feedGuideOpen}}" class="feed-guide">
+      <text>1. 先点上面的「复制链接」</text>
+      <text>2. iPhone：设置 → 日历 → 账户 → 添加订阅日历，粘贴链接</text>
+      <text>3. 华为：日历 → 设置 → 账户 → 其他日历 → 通过网址导入</text>
+      <text>4. 小米：日历 → 右上角 + → 订阅日历</text>
+      <text>5. 其他安卓：装 Outlook 或 Google 日历，走「从网络订阅」</text>
+      <text class="hint">
+        订阅不是实时的：改课后 iOS 隔一阵自动刷新，急的话在日历 App 里手动刷新一次。
+      </text>
+    </view>
+  </view>
+
   <!-- 同步到手机日历：小程序没有本地通知能力，课前要真的响只能借这条通道 -->
   <view class="card">
-    <view class="section-title">同步到手机日历</view>
+    <view class="section-title">直接写入手机日历（备用）</view>
     <text class="priority-desc">
       小程序退到后台后没法自己弹通知。把课写进手机自带日历，由日历 App 到点响铃。
     </text>
@@ -121,6 +168,25 @@
     <text class="hint">
       已静音的课不会写入 · 已上完的课自动跳过 · 微信不支持删除日历事件，改课后请在手机日历里删除旧事件再重新同步
     </text>
+
+    <view class="feed-guide-toggle" bindtap="onToggleCleanGuide">
+      <text>{{cleanGuideOpen ? '收起清理说明' : '日历里已经导入的怎么删除？'}}</text>
+    </view>
+    <view wx:if="{{cleanGuideOpen}}" class="feed-guide">
+      <text class="guide-title">订阅来的整份课表 —— 删订阅账户，一次清空</text>
+      <text>· iPhone：设置 → 日历 → 账户 → 已订阅日历 → 删除账户</text>
+      <text>· 华为：日历 → 设置 → 账户 → 找到订阅的 → 删除</text>
+      <text>· 小米：日历 → 设置 → 日历账户 → 删除</text>
+      <text>· Google 日历：设置 → 该日历 → 取消订阅</text>
+
+      <text class="guide-title">直接写入的散落事件 —— 微信删不掉，只能手动</text>
+      <text>· 日历里搜索课程名，把搜到的全找出来</text>
+      <text>· 打开事件 → 编辑 → 删除</text>
+      <text class="hint">
+        ⚠️ 重复事件一定要选「删除所有重复事件」，逐条删删不完。
+        建议只保留订阅那份：直接写入的残留会和订阅内容重复提醒两次。
+      </text>
+    </view>
   </view>
 
   <!-- 节假日表（内置默认 + 云端下发） -->
