@@ -259,8 +259,10 @@
   color: var(--color-text-tertiary);
 }
 
+/* 用 --color-bg 而不是 --color-surface-alt：后者是深色模式分支才引入的变量，
+   在 master 基线上未定义，会静默回退到浅灰、深色下变白块 */
 .holiday-list {
-  background: var(--color-surface-alt, #f5f6f8);
+  background: var(--color-bg);
   border-radius: 12rpx;
   padding: 8rpx 20rpx;
   margin-bottom: 16rpx;
