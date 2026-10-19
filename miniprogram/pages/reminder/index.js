@@ -5,26 +5,23 @@
  * 用户不仅知道「今天没提醒」，还能知道「为什么」。
  */
 const store = require('../../api/store');
-const { shouldNotifyWithCalendar, buildCalendarIndex } = require('../../logic/dnd-rule');
+const { shouldNotifyWithCalendar } = require('../../logic/dnd-rule');
 const { listCourses } = require('../../api/course');
 const { withMuted, toggleMute } = require('../../logic/reminder-mute');
 const calendarSync = require('../../logic/calendar-sync');
 const { eventKey, summarizeSyncResult } = calendarSync;
 const timetableApi = require('../../api/timetable');
 const { getRangeTime } = require('../../utils/schedule');
+const holiday = require('../../logic/holiday');
 
 const app = getApp();
 const CONFIG_KEY = 'reminder_config';
 const SYNCED_KEY = 'calendar_synced_keys';   // 已写入系统日历的事件 key（微信删不掉，靠它避免重复堆）
 const SYNC_BATCH = 5;                        // 每批写入条数：安卓一次塞十几条会被系统丢掉
 
-// 演示用的节假日/调休数据（真实项目从云端拉取，内置一份保证离线可用）
-const DEMO_CALENDAR = [
-  { date: '2026-10-01', type: 'holiday' },
-  { date: '2026-10-02', type: 'holiday' },
-  { date: '2026-10-03', type: 'holiday' },
-  { date: '2026-09-27', type: 'makeup' }
-];
+/** 判定演示用的固定日期：法定节假日 / 调休上班日各取一个真实日期 */
+const DEMO_HOLIDAY_DATE = '2026-10-01';   // 国庆节
+const DEMO_MAKEUP_DATE = '2026-10-10';    // 国庆调休上班（周六）
 
 const PRIORITY_ROWS = [
   { order: 1, cond: '已全局关闭提醒', result: '不提醒', note: '总开关，最高优先级' },
@@ -56,11 +53,17 @@ Page({
     timer: null,
     syncing: false,      // 正在写入系统日历
     syncResult: '',      // 同步结果反馈（成功条数 / 失败原因）
-    syncedCount: 0       // 本地记录的「已写入日历」事件数
+    syncedCount: 0,      // 本地记录的「已写入日历」事件数
+    holidayIndex: {},    // { 'YYYY-MM-DD': 'holiday' | 'makeup' }，供判定演示使用
+    holidaySource: '',   // 数据来源文案（内置默认表 / 云端已更新 / 云端不可用…）
+    holidayUpdated: '',  // 更新时间文案
+    holidayUpcoming: [], // 即将到来的假期段 [{name, start, end, days}]
+    holidayRefreshing: false
   },
 
   onLoad() {
     this.loadConfig();
+    this.loadHolidays();
     app.whenReady(() => this.loadCourses());
   },
 
@@ -110,6 +113,46 @@ Page({
     } catch (e) {
       console.error('[reminder] 加载课程失败', e);
     }
+  },
+
+  /* ---------- 节假日数据（内置表打底 + 云端下发覆盖） ---------- */
+
+  /**
+   * 先同步拿出可用数据（缓存 / 内置）保证界面立刻有内容，
+   * 再异步联网刷新一次 —— 刷新失败静默降级，不影响判定。
+   */
+  loadHolidays() {
+    const local = holiday.loadCalendar();
+    this.applyHoliday(local);
+    this.refreshHolidays(false);
+  },
+
+  async refreshHolidays(force) {
+    if (this.data.holidayRefreshing) return;
+    this.setData({ holidayRefreshing: true });
+    try {
+      const r = await holiday.refresh(!!force);
+      this.applyHoliday(r);
+    } catch (e) {
+      console.error('[reminder] 刷新节假日失败', e);
+    } finally {
+      this.setData({ holidayRefreshing: false });
+    }
+  },
+
+  applyHoliday(payload) {
+    const p = payload || {};
+    const records = p.records || [];
+    this.setData({
+      holidayIndex: holiday.toIndex(records),
+      holidaySource: holiday.sourceText(p.source, p.error),
+      holidayUpdated: p.updatedAt ? formatDate(p.updatedAt) : '',
+      holidayUpcoming: holiday.upcoming(records, holiday.todayString(), 3)
+    });
+  },
+
+  onRefreshHolidays() {
+    this.refreshHolidays(true);
   },
 
   onToggleMute(e) {
@@ -214,6 +257,9 @@ Page({
       leadMinutes: this.data.config.leadMinutes,
       // 静音的课不该写进日历：用户明确关掉的课，换个通道又响回来就自相矛盾了
       silentCourses: this.data.config.silentCourses,
+      // 法定节假日不写：日历 App 不看我们的免打扰判定，放假当天照样响铃，
+      // 唯一的办法是那天根本没有这个事件
+      holidayIndex: this.data.holidayIndex,
       rangeTime: (slot, count) => getRangeTime(slot, count),
       now: new Date()
     });
@@ -460,30 +506,35 @@ Page({
 
   /* ---------- 判定演示（让「为什么没提醒」可见） ---------- */
   onDemo() {
-    const calendar = buildCalendarIndex(DEMO_CALENDAR);
-    const base = {
-      date: '2026-10-01',
-      timeStr: '09:45',
-      userConfig: this.data.config,
-      course: this.data.courses[0] || { id: 1 }
-    };
-    const r = shouldNotifyWithCalendar(base, calendar);
-    this.setData({
-      demoResult: `${base.date} 09:45 → ${r.notify ? '提醒' : '不提醒'}（${r.reason}）`
-    });
+    this.runDemo(DEMO_HOLIDAY_DATE, '');
   },
 
   onDemoMakeup() {
-    const calendar = buildCalendarIndex(DEMO_CALENDAR);
+    this.runDemo(DEMO_MAKEUP_DATE, '（调休上班日）');
+  },
+
+  /**
+   * 用真实的节假日索引跑一次判定
+   * @param {string} date
+   * @param {string} suffix 结果文案里追加的说明
+   */
+  runDemo(date, suffix) {
     const base = {
-      date: '2026-09-27',
+      date,
       timeStr: '09:45',
       userConfig: this.data.config,
       course: this.data.courses[0] || { id: 1 }
     };
-    const r = shouldNotifyWithCalendar(base, calendar);
+    const r = shouldNotifyWithCalendar(base, this.data.holidayIndex);
     this.setData({
-      demoResult: `${base.date} 09:45（调休补课日）→ ${r.notify ? '提醒' : '不提醒'}（${r.reason}）`
+      demoResult: `${date} 09:45${suffix} → ${r.notify ? '提醒' : '不提醒'}（${r.reason}）`
     });
   }
 });
+
+/** 时间戳 → "MM-DD HH:mm" */
+function formatDate(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}

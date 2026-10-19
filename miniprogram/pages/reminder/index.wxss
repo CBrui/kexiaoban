@@ -240,3 +240,56 @@
   color: var(--color-text);
   line-height: 1.6;
 }
+
+/* ---------- 节假日表 ---------- */
+.holiday-meta {
+  display: flex;
+  align-items: center;
+  font-size: 24rpx;
+  color: var(--color-text-secondary);
+  margin-bottom: 16rpx;
+}
+
+.holiday-source {
+  flex: 1;
+}
+
+.holiday-updated {
+  margin-right: 16rpx;
+  color: var(--color-text-tertiary);
+}
+
+.holiday-list {
+  background: var(--color-surface-alt, #f5f6f8);
+  border-radius: 12rpx;
+  padding: 8rpx 20rpx;
+  margin-bottom: 16rpx;
+}
+
+.holiday-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14rpx 0;
+  font-size: 26rpx;
+}
+
+.holiday-row + .holiday-row {
+  border-top: 1rpx solid var(--color-border);
+}
+
+.holiday-name {
+  color: var(--color-text);
+}
+
+.holiday-range {
+  color: var(--color-text-tertiary);
+  font-size: 24rpx;
+}
+
+.holiday-none {
+  font-size: 26rpx;
+  color: var(--color-text-secondary);
+  padding: 20rpx 0;
+  margin-bottom: 16rpx;
+}

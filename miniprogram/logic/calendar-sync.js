@@ -17,7 +17,7 @@
  *      连续周次才能用 week 重复；单周 / 双周 / 跳跃周次只能按周各写一条。
  *   3. 只能在**真机**上调通，模拟器与开发者工具都调不动日历。
  */
-const { parseWeeks, weekToDate } = require('../utils/week');
+const { parseWeeks, weekToDate, formatDate } = require('../utils/week');
 
 /** 一次同步的事件数量上限：超过就该让用户确认，避免把日历刷爆 */
 const MAX_EVENTS = 120;
@@ -89,23 +89,36 @@ function planCourse(course, opts) {
   };
 
   // 未来（或今天尚未开始）的上课日期
+  const holidayIndex = o.holidayIndex || null;
+  const skippedHolidays = [];
   const dates = [];
   for (const w of weeks) {
     const d = weekToDate(o.termStartMonday, w, dayOfWeek);
+    // weekToDate 返回的是 Date 对象，查节假日索引必须先转成 'YYYY-MM-DD'
+    const dateStr = formatDate(d);
     const startStamp = stampOf(d, range.start);
     if (!startStamp) continue;
     if (excludePast && startStamp <= Math.floor(now.getTime() / 1000)) continue;
+    // 法定节假日不上课，日历里也不该响。
+    // 只剔 holiday，不剔 makeup —— 调休日该上的课照常。
+    if (holidayIndex && holidayIndex[dateStr] === 'holiday') {
+      skippedHolidays.push(dateStr);
+      continue;
+    }
     dates.push({ week: w, date: d, startStamp, endStamp: stampOf(d, range.end) });
   }
-  if (!dates.length) return { events: [], reason: '这门课已经全部上完了' };
+  if (!dates.length) {
+    return { events: [], reason: '这门课已经全部上完了（或全部落在节假日）' };
+  }
 
-  // 连续周次 → 一条「每周重复」；否则按实际每周各写一条
-  const weeksLeft = dates.map((x) => x.week);
-  if (dates.length >= 2 && isContinuous(weeksLeft)) {
-    const first = dates[0];
-    const last = dates[dates.length - 1];
-    return {
-      events: [Object.assign({}, base, {
+  // 按「周次是否连续」切成若干段：连续段写成一条「每周重复」，
+  // 孤立周写成单条。这样节假日把学期打断成两段时，是 2 条重复事件
+  // 而不是十几条零散事件。
+  const events = splitIntoRuns(dates).map((run) => {
+    const first = run[0];
+    const last = run[run.length - 1];
+    if (run.length >= 2) {
+      return Object.assign({}, base, {
         kind: 'repeat',
         startTime: first.startStamp,
         endTime: first.endStamp,
@@ -113,19 +126,37 @@ function planCourse(course, opts) {
         repeatEndTime: endOfDayStamp(last.date),
         _courseId: c.id,
         _weeks: `${first.week}-${last.week}`
-      })]
-    };
-  }
-
-  return {
-    events: dates.map((x) => Object.assign({}, base, {
+      });
+    }
+    return Object.assign({}, base, {
       kind: 'single',
-      startTime: x.startStamp,
-      endTime: x.endStamp,
+      startTime: first.startStamp,
+      endTime: first.endStamp,
       _courseId: c.id,
-      _weeks: String(x.week)
-    }))
-  };
+      _weeks: String(first.week)
+    });
+  });
+
+  return { events, skippedHolidays };
+}
+
+/**
+ * 把按周升序的日期切成连续段（相邻周次差 1 视为同一段）
+ * @param {Array<{week:number}>} dates
+ * @returns {Array<Array>}
+ */
+function splitIntoRuns(dates) {
+  const runs = [];
+  let cur = null;
+  for (const d of dates) {
+    if (cur && d.week === cur[cur.length - 1].week + 1) {
+      cur.push(d);
+    } else {
+      cur = [d];
+      runs.push(cur);
+    }
+  }
+  return runs;
 }
 
 /**
@@ -250,6 +281,7 @@ module.exports = {
   stampOf,
   endOfDayStamp,
   isContinuous,
+  splitIntoRuns,
   eventKey,
   isGestureError,
   summarizeSyncResult,

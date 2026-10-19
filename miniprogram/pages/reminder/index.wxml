@@ -123,6 +123,30 @@
     </text>
   </view>
 
+  <!-- 节假日表（内置默认 + 云端下发） -->
+  <view class="card">
+    <view class="section-title">节假日表</view>
+    <view class="holiday-meta">
+      <text class="holiday-source">数据：{{holidaySource}}</text>
+      <text wx:if="{{holidayUpdated}}" class="holiday-updated">{{holidayUpdated}}</text>
+      <text class="link-btn" bindtap="onRefreshHolidays">
+        {{holidayRefreshing ? '更新中…' : '立即更新'}}
+      </text>
+    </view>
+
+    <view wx:if="{{holidayUpcoming.length}}" class="holiday-list">
+      <view class="holiday-row" wx:for="{{holidayUpcoming}}" wx:key="start">
+        <text class="holiday-name">{{item.name}}</text>
+        <text class="holiday-range">{{item.start}} 起 {{item.days}} 天</text>
+      </view>
+    </view>
+    <view wx:else class="holiday-none">当前数据范围内没有后续的法定节假日</view>
+
+    <text class="hint">
+      法定节假日一律静默。高校不一定照国务院的调休安排补课，学校另有安排时用上面的「自定义不提醒日期」处理
+    </text>
+  </view>
+
   <!-- 判定演示 -->
   <view class="card">
     <view class="section-title">判定演示</view>
