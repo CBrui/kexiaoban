@@ -25,19 +25,27 @@
     "list": [
       {
         "pagePath": "pages/timetable/index",
-        "text": "课表"
+        "text": "课表",
+        "iconPath": "images/tab/timetable.png",
+        "selectedIconPath": "images/tab/timetable-active.png"
       },
       {
         "pagePath": "pages/build/index",
-        "text": "建表"
+        "text": "建表",
+        "iconPath": "images/tab/build.png",
+        "selectedIconPath": "images/tab/build-active.png"
       },
       {
         "pagePath": "pages/match/index",
-        "text": "找搭子"
+        "text": "找搭子",
+        "iconPath": "images/tab/match.png",
+        "selectedIconPath": "images/tab/match-active.png"
       },
       {
         "pagePath": "pages/profile/index",
-        "text": "我的"
+        "text": "我的",
+        "iconPath": "images/tab/profile.png",
+        "selectedIconPath": "images/tab/profile-active.png"
       }
     ]
   },

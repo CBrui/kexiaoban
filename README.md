@@ -25,43 +25,57 @@ kexiaoban/
 ├── cloudfunctions/            # ★ 云函数（服务端，绕过集合「仅创建者可读写」限制）
 │   ├── auth/                  # 微信登录：以 OPENID 为身份锚点找/建档案（邀请码服务端查重）
 │   ├── findBuddy/             # 找搭子：按邀请码查同学 / 校验关系后读对方课程 / 列好友
-│   └── recognizeTimetable/    # ★ 课表截图识别：下载云存储图片 → 调视觉大模型 → 回原始文本
+│   ├── recognizeTimetable/    # ★ 课表截图识别：下载云存储图片 → 调视觉大模型 → 回原始文本
+│   ├── calendarFeed/          # ★ 订阅日历 .ics 源（HTTP 访问服务入口，凭 token 拉取）
+│   └── holidaySync/           # ★ 节假日下发（集合为空时自动建集合 + 播种官方表）
 ├── docs/
 │   └── COLLABORATION.md       # 协作开发指南（分支 / 提交 / 合并规则）
 ├── test/
-│   └── run.js                 # 核心算法单元测试（node test/run.js）
+│   ├── run.js                 # 核心算法单元测试（node test/run.js）
+│   ├── scan-dark.js           # 深色模式漏网扫描（浅色硬编码未被媒体查询覆盖的类）
+│   └── tools/                 # 测试素材 / 图标生成脚本（Python，不进小程序包）
+│       ├── gen-tab-icons.py   # ★ tabBar 图标生成（零依赖，见下方说明）
+│       └── tab-preview.png    # 图标评审图（浅/深底 × 普通/选中 四行）
 └── miniprogram/
-    ├── app.js                 # 全局初始化：云服务初始化、登录态检查
+    ├── app.js                 # 全局初始化：云服务初始化、登录态检查、异常兜底
     ├── app.json               # 页面注册、tabBar、窗口样式
-    ├── app.wxss               # 全局样式与设计变量
+    ├── app.wxss               # 全局样式与设计变量（含深色模式变量覆盖）
+    ├── theme.json             # ★ 深色模式主题变量（仅能被 app.json 以 @xxx 引用）
     ├── config.js              # 环境配置（云环境 ID、学期起始日等）
+    ├── images/tab/            # ★ tabBar 图标（81×81 PNG，由 test/tools 的脚本生成）
     ├── pages/
-    │   ├── timetable/         # 课表周视图（首页）
+    │   ├── timetable/         # 课表周视图（首页，假期列标灰）
     │   ├── build/             # 建表页（手工 / 对话 / ★ 拍照导入）
     │   ├── match/             # 找搭子（空闲对齐）
-    │   ├── reminder/          # 提醒设置与免打扰优先级
+    │   ├── reminder/          # 提醒设置与免打扰优先级（含订阅日历、节假日表）
     │   ├── schedule/          # 节次设置（自定义上午/下午/晚间节数）
     │   ├── timetable-manage/  # ★ 课表管理（多课表：新建/切换/改开课时间与总周次）
     │   └── profile/           # 个人中心
     ├── logic/                 # ★ 业务逻辑层（与页面解耦）
     │   ├── course-expand.js   # 课程展开算法
     │   ├── free-align.js      # 空闲对齐算法
-    │   ├── dnd-rule.js        # 免打扰判定算法
+    │   ├── dnd-rule.js        # 免打扰判定算法（七级优先级）
     │   ├── reminder-mute.js   # 单课程静音态计算（muted / 副标题）
-    │   └── calendar-sync.js   # ★ 课表 → 手机系统日历事件映射（周重复折叠）
+    │   ├── calendar-sync.js   # ★ 课表 → 手机系统日历事件映射（周重复折叠 + 避假）
+    │   ├── holiday.js         # ★ 节假日三层策略（内置表 / 云端覆盖 / storage 缓存）
+    │   ├── course-shift.js    # 对话式调课（补课 / 换课 / 挪课 / 停课）
+    │   └── shift-date.js      # 调课文本里的日期解析
     ├── api/                   # ★ 数据访问层（统一云服务封装）
     │   ├── client.js          # 云服务客户端初始化
     │   ├── store.js           # 本地存储适配器（无云环境时降级）
-    │   ├── doc.js             # ★ 云文档归一化（_id → id）
+    │   ├── doc.js             # ★ 云文档归一化（_id → id）+ fetchAll 分页
     │   ├── timetable.js       # ★ 课表（元数据）CRUD + 多课表隔离与迁移
     │   ├── course.js          # 课程表 CRUD（默认限定当前课表；读对方课程走云函数）
     │   ├── ai.js              # ★ AI 统一解析管线（对话 + 图片两种输入；含别名兼容与降级）
+    │   ├── calendar-feed.js   # 订阅链接获取 / 重置 / 配置同步
     │   └── profile.js         # 用户档案 CRUD + 邀请码 + 关系绑定
     ├── utils/
     │   ├── week.js            # 周次解析与日期换算
     │   ├── schedule.js        # 作息时间：节次→时间、连堂合并、休息时段
     │   └── color.js           # 课程取色（12 色 + 同表内消重）
 ```
+
+> **tabBar 图标不要手工替换**：八个 PNG 由 `test/tools/gen-tab-icons.py` 用几何参数生成（纯 Python 标准库，不需要 PIL / ImageMagick）。想改线宽、圆角、配色就改脚本顶部常量重跑，加 `--preview` 会同时输出 `test/tools/tab-preview.png`（浅底/深底 × 普通/选中 四行对照）。
 
 ## 快速开始
 
