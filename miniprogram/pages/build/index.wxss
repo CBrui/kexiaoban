@@ -271,6 +271,16 @@
   margin-bottom: 24rpx;
 }
 
+/* 未选图片的占位：虚线框，明确告诉用户这里该放什么 */
+.image-empty {
+  margin-bottom: 24rpx;
+  padding: 48rpx 32rpx;
+  text-align: center;
+  border: 2rpx dashed var(--color-border);
+  border-radius: 12rpx;
+  background: var(--color-primary-soft);
+}
+
 .image-thumb {
   width: 100%;
   height: 320rpx;
@@ -452,4 +462,47 @@
 
 .shift-done-btn {
   margin-top: 16rpx;
+}
+
+/**
+ * 深色模式覆盖 —— 只改语义状态色（错误红 / 提醒橙 / 通过绿）的浅底与深字。
+ * 彩色按钮上的白字（.tab-active / .image-clear / .shift-action）保持不动，
+ * 它们在深色下依然是白字才正确。
+ */
+@media (prefers-color-scheme: dark) {
+  .parse-error {
+    color: #ff8a8a;
+    background: #3d1a1a;
+  }
+
+  .missing-tag {
+    color: #e0a04a;
+    background: #3a2c14;
+  }
+
+  .expect-high {
+    color: #5fd08a;
+    background: #14301f;
+  }
+
+  .expect-mid {
+    color: #e0a04a;
+    background: #3a2c14;
+  }
+
+  .expect-low {
+    color: #ff8a8a;
+    background: #3d1a1a;
+  }
+
+  .shift-reason { color: #ff8a8a; }
+
+  .shift-conflict { background: #3a2c14; }
+  .shift-conflict-title { color: #e0a04a; }
+  .shift-conflict-row { color: #e0a04a; }
+
+  .shift-tag.danger {
+    color: #ff8a8a;
+    background: #3d1a1a;
+  }
 }

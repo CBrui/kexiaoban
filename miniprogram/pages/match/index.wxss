@@ -456,3 +456,37 @@
   background: var(--color-danger);
   border-color: var(--color-danger);
 }
+
+/**
+ * 深色模式覆盖
+ *
+ * 为什么只做覆盖而不改上面的原值：这些颜色是「语义状态色」（空闲绿 / 冲突灰 /
+ * 我的蓝 / 对方橙），浅色下已调好，直接改值有回归风险。用媒体查询只改深色下的
+ * 表现，浅色完全不动。
+ *
+ * 图例实心块（.legend-*）不覆盖 —— 它们是色卡标识，任何主题下都应显示原色，
+ * 否则用户没法把图例和网格里的格子对上。
+ */
+@media (prefers-color-scheme: dark) {
+  .tip-empty { background: #3a2c14; }
+  .tip-none { background: #1e2a47; }
+  .tip-error { background: #3d1a1a; }
+
+  .cell-free { background: #14301f; }
+  .cell-clash { background: #2a2c30; }
+  .cell-clash .mg-cell-label { color: #8f959e; }
+  .cell-mine { background: #1e2a47; }
+  .cell-mine .mg-cell-label { color: #5b90ff; }
+  .cell-theirs { background: #3a2c14; }
+  .cell-theirs .mg-cell-label { color: #e0a04a; }
+  .cell-partial { background: #1e2a47; }
+  .cell-partial .mg-cell-label { color: #5b90ff; }
+
+  .skip-note {
+    color: #e0a04a;
+    background: #3a2c14;
+  }
+
+  .manage-bar { background: var(--color-surface); }
+  .manage-btn { background: var(--color-surface); }
+}

@@ -11,6 +11,9 @@ page {
   --color-border: #e5e6eb;
   --color-bg: #f5f6f8;
   --color-surface: #ffffff;
+  /* 次级表面：卡片内的浅灰块（如同步结果框）。此前代码引用了这个变量但从未定义，
+     一直靠 var() 的回退值兜底 —— 深色下回退到浅灰就是一块白斑。 */
+  --color-surface-alt: #f5f6f8;
   --color-danger: #f53f3f;
   --radius-md: 12rpx;
   --radius-lg: 20rpx;
@@ -20,6 +23,32 @@ page {
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 28rpx;
   line-height: 1.6;
+}
+
+/**
+ * 深色模式变量覆盖
+ *
+ * 为什么用媒体查询而不是 theme.json：theme.json 里的变量**只能**被 app.json
+ * 的配置项以 @xxx 引用（导航栏 / tabBar），不会自动变成 WXSS 变量。
+ * WXSS 侧的深色适配官方给了唯一解 —— prefers-color-scheme 媒体查询。
+ * 这里重定义同名变量，页面上所有 var(--color-*) 自动跟着变。
+ *
+ * 注意：该媒体查询不受 app.json 的 darkmode 开关影响，只要客户端支持深色
+ * 就会生效；darkmode: true 额外带来的是 onThemeChange 与 getSystemInfo 的 theme 字段。
+ */
+@media (prefers-color-scheme: dark) {
+  page {
+    --color-primary: #5b90ff;
+    --color-primary-soft: #1e2a47;
+    --color-text: #e8eaed;
+    --color-text-secondary: #a8adb5;
+    --color-text-tertiary: #80858c;
+    --color-border: #2c2e33;
+    --color-bg: #000000;
+    --color-surface: #1a1a1c;
+    --color-surface-alt: #2a2c30;
+    --color-danger: #ff6b6b;
+  }
 }
 
 .page {
@@ -70,9 +99,48 @@ page {
   border: 1rpx solid var(--color-primary);
 }
 
+/**
+ * 空态 —— 全局统一组件
+ *
+ * 原先只有 timetable 页有一套私有空态样式，其余页面用的是一行灰色 hint 文字，
+ * 空列表时用户看不出「这里是空的」还是「加载失败了」。现提升为全局类：
+ *   .empty-tip        容器
+ *   .empty-title      主标题（「还没有课程」）
+ *   .empty-desc       说明（告诉用户下一步能做什么）
+ *   .empty-btn        引导按钮
+ */
 .empty-tip {
   padding: 80rpx 40rpx;
   text-align: center;
   color: var(--color-text-tertiary);
   font-size: 26rpx;
+}
+
+.empty-title {
+  display: block;
+  font-size: 32rpx;
+  color: var(--color-text);
+  margin-bottom: 12rpx;
+}
+
+.empty-desc {
+  display: block;
+  color: var(--color-text-tertiary);
+  font-size: 26rpx;
+  margin-bottom: 32rpx;
+}
+
+.empty-btn {
+  width: 300rpx;
+  margin: 0 auto;
+}
+
+/* 卡片内的轻量空态（不占整屏，用在列表卡片里） */
+.empty-inline {
+  padding: 48rpx 32rpx;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: 26rpx;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
 }
