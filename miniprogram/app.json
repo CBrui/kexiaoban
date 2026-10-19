@@ -8,18 +8,20 @@
     "pages/schedule/index",
     "pages/timetable-manage/index"
   ],
+  "darkmode": true,
+  "themeLocation": "theme.json",
   "window": {
-    "backgroundTextStyle": "light",
-    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundTextStyle": "@bgTxtStyle",
+    "navigationBarBackgroundColor": "@navBgColor",
     "navigationBarTitleText": "课小伴",
-    "navigationBarTextStyle": "black",
-    "backgroundColor": "#f5f6f8"
+    "navigationBarTextStyle": "@navTxtStyle",
+    "backgroundColor": "@bgColor"
   },
   "tabBar": {
-    "color": "#8a8f99",
-    "selectedColor": "#3a7afe",
-    "backgroundColor": "#ffffff",
-    "borderStyle": "black",
+    "color": "@tabFontColor",
+    "selectedColor": "@tabSelectedColor",
+    "backgroundColor": "@tabBgColor",
+    "borderStyle": "@tabBorderStyle",
     "list": [
       {
         "pagePath": "pages/timetable/index",

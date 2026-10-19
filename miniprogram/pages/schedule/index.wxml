@@ -67,13 +67,18 @@
   <!-- 时间轴预览 -->
   <view class="card">
     <view class="section-title">时间轴预览（共 {{totalSlots}} 节）</view>
-    <view class="preview-grid">
+    <!-- 空态：一个节次都没配时，时间轴是空的，必须说明「为什么空 + 怎么办」 -->
+    <view wx:if="{{totalSlots === 0}}" class="empty-tip">
+      <text class="empty-title">还没有任何节次</text>
+      <text class="empty-desc">至少为一个时段设置节数，课表才会显示时间轴</text>
+      <view class="btn btn-primary empty-btn" bindtap="onReset">恢复默认</view>
+    </view>
+    <view wx:else class="preview-grid">
       <view class="preview-item" wx:for="{{preview}}" wx:key="slot">
         <text class="preview-no">{{item.slot}}</text>
         <text class="preview-time">{{item.text}}</text>
       </view>
     </view>
-    <text wx:if="{{totalSlots === 0}}" class="hint">当前没有任何节次，请至少为一个时段设置节数</text>
   </view>
 
   <!-- 操作 -->

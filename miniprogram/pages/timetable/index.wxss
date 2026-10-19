@@ -47,6 +47,19 @@
   margin: 0 auto;
 }
 
+/* 深色模式覆盖：错误条底色、休息时段灰块 */
+@media (prefers-color-scheme: dark) {
+  .error-bar {
+    color: #ff8a8a;
+    background: #3d1a1a;
+  }
+
+  .slot-break,
+  .break-cell {
+    background: #2a2c30;
+  }
+}
+
 /* ---------- 网格容器 ---------- */
 .grid-wrap {
   flex: 1;

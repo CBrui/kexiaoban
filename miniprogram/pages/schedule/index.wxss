@@ -223,3 +223,11 @@
   flex: 1;
   margin: 0 10rpx;
 }
+
+/* 深色模式覆盖：节次超限提示块 */
+@media (prefers-color-scheme: dark) {
+  .overflow-tip { background: #3d1a1a; }
+  .overflow-title { color: #ff8a8a; }
+  .overflow-desc { color: #ff8a8a; }
+  .overflow-item { color: #d99898; }
+}

@@ -178,10 +178,14 @@
         <switch checked="{{fastMode}}" bindchange="onToggleFast" color="#3a7afe" />
       </view>
 
-      <!-- 已选图片预览 -->
+      <!-- 已选图片预览 / 未选图占位 -->
       <view wx:if="{{imagePath}}" class="image-preview">
         <image class="image-thumb" src="{{imagePath}}" mode="aspectFit" />
         <view class="image-clear" bindtap="onClearImage">重新选择</view>
+      </view>
+      <view wx:else class="image-empty">
+        <text class="empty-title">还没选图片</text>
+        <text class="empty-desc">教务系统截图识别率最高</text>
       </view>
 
       <view class="dialog-actions">

@@ -101,7 +101,12 @@
       </view>
       <text class="hint">开启 = 该课程静音</text>
     </view>
-    <text wx:else class="hint">还没有课程，先去建表</text>
+    <!-- 空态：课表为空时给明确引导，而不是一行看不出状态的灰字 -->
+    <view wx:else class="empty-tip">
+      <text class="empty-title">还没有课程</text>
+      <text class="empty-desc">建好课表后，可以在这里给每门课单独设置提醒</text>
+      <view class="btn btn-primary empty-btn" bindtap="onGoBuild">去建表</view>
+    </view>
   </view>
 
   <!-- 同步到手机日历：小程序没有本地通知能力，课前要真的响只能借这条通道 -->

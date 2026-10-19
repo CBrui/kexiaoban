@@ -78,6 +78,14 @@ Page({
     if (this.data.timer) clearInterval(this.data.timer);
   },
 
+  /**
+   * 空态引导：跳到建表页。
+   * 提醒页依赖课程数据，没有课时整页大部分功能是空的，必须给出去路。
+   */
+  onGoBuild() {
+    wx.switchTab({ url: '/pages/build/index' });
+  },
+
   loadConfig() {
     try {
       const saved = wx.getStorageSync(CONFIG_KEY);

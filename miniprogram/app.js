@@ -17,7 +17,14 @@ App({
     // 课程数据是否已在别处被写过（手工新增 / AI 建表 / 调课）。
     // 由 api/course.js 的写操作置 true，课表页 onShow 检测到就静默重拉一次。
     // 小程序没有跨页事件总线，用这个脏标记避免每次切页都白读一次库。
-    coursesDirty: false
+    coursesDirty: false,
+    // 系统主题：light / dark，由 onThemeChange 与 onLaunch 写入。
+    // 深色模式下 WXSS 走 prefers-color-scheme 媒体查询，这里只做记录，
+    // 供个别必须靠 JS 判断的场景（如分享卡片配色）读取。
+    theme: 'light',
+    // 最近一次全局错误（onError / onUnhandledRejection 写入）。
+    // 真机上没法挂控制台，留一份在内存里，方便用模拟器 evaluate 读出来排查。
+    lastError: null
   },
 
   onLaunch() {
@@ -27,8 +34,26 @@ App({
       useCloud: USE_CLOUD
     });
 
-    // 2. 检查登录态
+    // 2. 记录系统主题（深色模式）
+    this.syncTheme();
+
+    // 3. 检查登录态
     this.checkLogin();
+  },
+
+  /**
+   * 读取系统主题写入 globalData。
+   * 取不到（旧基础库 / 未开 darkmode）就保持 light，不影响渲染。
+   */
+  syncTheme() {
+    try {
+      const info = wx.getSystemInfoSync && wx.getSystemInfoSync();
+      if (info && info.theme) {
+        this.globalData.theme = info.theme;
+      }
+    } catch (e) {
+      // 主题读取失败不影响任何功能
+    }
   },
 
   /**
@@ -142,5 +167,48 @@ App({
       this.globalData.ready = true;
       this.flushReady();
     }
+  },
+
+  /**
+   * 全局 JS 错误兜底。
+   *
+   * 为什么要有：此前 app.js 完全没有错误处理入口，页面里未捕获的异常在真机上
+   * 表现为「白屏 / 点了没反应」，控制台又挂不上，排查全靠猜。这里统一留痕。
+   *
+   * 注意：onError 触发时小程序可能已处于不稳定状态，**不要在里面做任何
+   * 异步操作或界面跳转**，只做同步的记录与打印。
+   */
+  onError(err) {
+    const msg = (err && (err.message || err.errMsg)) || String(err);
+    const stack = (err && err.stack) || '';
+    this.globalData.lastError = { type: 'error', msg: msg, stack: stack, at: Date.now() };
+    console.error('[app] 未捕获错误', msg, stack);
+  },
+
+  /**
+   * 未处理的 Promise rejection 兜底。
+   * 云函数 / 数据库调用漏写 catch 时会走到这里（比 onError 更常见）。
+   */
+  onUnhandledRejection(res) {
+    const reason = res && res.reason;
+    const msg = (reason && (reason.message || reason.errMsg)) || String(reason || res);
+    this.globalData.lastError = { type: 'rejection', msg: msg, at: Date.now() };
+    console.error('[app] 未处理的 Promise rejection', msg);
+  },
+
+  /**
+   * 页面不存在兜底：扫码 / 分享链接指向了不存在的路径时，回首页而不是白屏。
+   */
+  onPageNotFound(res) {
+    console.warn('[app] 页面不存在，已回首页', res && res.path);
+    wx.switchTab({ url: '/pages/timetable/index' });
+  },
+
+  /**
+   * 系统主题切换（需 app.json 配置 darkmode: true 才会触发）。
+   * 样式层面由 WXSS 的 prefers-color-scheme 自动切换，这里只同步记录。
+   */
+  onThemeChange(res) {
+    this.globalData.theme = (res && res.theme) || 'light';
   }
 });
