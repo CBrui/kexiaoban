@@ -129,6 +129,9 @@
         <view class="btn btn-mini" bindtap="onCopyFeedUrl">复制链接</view>
         <text class="link-btn" bindtap="onResetFeedUrl">重新生成</text>
       </view>
+      <text class="hint">
+        法定节假日自动跳过（放假那天不生成事件，调休上班日照常），改课后在日历里手动刷新一次。
+      </text>
     </view>
 
     <view wx:if="{{feedError}}" class="sync-result">{{feedError}}</view>

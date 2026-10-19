@@ -1868,7 +1868,7 @@ const storeApi = require(path.join(M, 'api/store'));
   /* ============ 56. 订阅日历 ICS 生成 ============ */
   group('【56】课表 → ICS 订阅源（calendarFeed）');
 
-  const { splitSegments, escapeText, foldLine, toIcsUtc, buildIcs, buildEvents } = feedIcs;
+  const { splitSegments, escapeText, foldLine, toIcsUtc, buildIcs, buildEvents, buildEventsEx } = feedIcs;
 
   /* --- 周次切段：RRULE 的 INTERVAL 是常量，间隔变了就必须拆 --- */
   const segAll = splitSegments([1, 2, 3, 4]);
@@ -2008,6 +2008,79 @@ const storeApi = require(path.join(M, 'api/store'));
   ok('weekToDate 复刻版与小程序版结果一致', dateDrift.length === 0, dateDrift.join(' / '));
   ok('第 1 周周一就是学期起始日', feedWeek.weekToDateStr('2026-09-07', 1, 1) === '2026-09-07');
   ok('第 5 周周六换算正确', feedWeek.weekToDateStr('2026-09-07', 5, 6) === '2026-10-10');
+
+  /* ============ 订阅源避假（日历 App 不看我们的免打扰判定，只能让那天没有事件） ============ */
+  group('【57】订阅源避假：放假当天用 EXDATE 剔除');
+
+  // 第 5 周周一 = 2026-10-05（国庆假期），第 5 周周六 = 2026-10-10（调休上班）
+  const hIdx = { '2026-10-05': 'holiday', '2026-10-10': 'makeup' };
+  const hOpts = Object.assign({}, evOpts, { holidayIndex: hIdx });
+
+  /* --- 回归保护：不传 holidayIndex 时行为与改动前完全一致 --- */
+  const noH = buildEventsEx(Object.assign({}, courseBase, { weeks: '1-8' }), evOpts);
+  ok('不传节假日索引时不写 EXDATE', noH.lines.join('\n').indexOf('EXDATE') === -1);
+  ok('不传节假日索引时 RRULE 仍用 COUNT',
+    noH.lines.join('\n').indexOf('RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=8') !== -1);
+  eq('不传节假日索引时事件数不变', noH.lines.filter((l) => l === 'BEGIN:VEVENT').length, 1);
+
+  /* --- 段内有一天放假 → EXDATE --- */
+  const hMon = buildEventsEx(Object.assign({}, courseBase, { weeks: '1-8' }), hOpts);
+  const hMonText = hMon.lines.join('\n');
+  eq('放假当天生成 1 条事件（不是拆成多条）',
+    hMon.lines.filter((l) => l === 'BEGIN:VEVENT').length, 1);
+  ok('放假当天写进 EXDATE', hMonText.indexOf('EXDATE:20261005T000000Z') !== -1);
+  ok('EXDATE 的时刻与 DTSTART 一致（必须是同一时刻才匹配得上）',
+    hMonText.indexOf('DTSTART:20260907T000000Z') !== -1 &&
+    hMonText.indexOf('EXDATE:20261005T000000Z') !== -1);
+  eq('剔除计数为 1', hMon.exdateCount, 1);
+
+  /**
+   * ⚠️ 有 EXDATE 时必须改用 UNTIL：COUNT 计数的是展开实例数，各家客户端对
+   * 「先剔除还是先计数」实现不统一，先剔除再计数会把末周的课截掉。
+   */
+  ok('有 EXDATE 时 RRULE 改用 UNTIL', hMonText.indexOf('RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=') !== -1);
+  ok('有 EXDATE 时不再用 COUNT', hMonText.indexOf(';COUNT=') === -1);
+  // 第 1 周周一 2026-09-07，第 8 周周一 = 09-07 + 7×7 天 = 2026-10-26
+  ok('UNTIL 落在末周当天（第 8 周周一 2026-10-26 该节课结束 09:35 → UTC 01:35）',
+    hMonText.indexOf('UNTIL=20261026T013500Z') !== -1);
+
+  /* --- 调休上班日照常上课，不能剔除 --- */
+  const hSat = buildEventsEx(
+    Object.assign({}, courseBase, { weeks: '1-8', day_of_week: 6 }), hOpts);
+  ok('调休上班日不写进 EXDATE', hSat.lines.join('\n').indexOf('EXDATE') === -1);
+  eq('调休上班日剔除计数为 0', hSat.exdateCount, 0);
+
+  /* --- 整段都落在假期 → 不生成事件 --- */
+  const hAll = buildEventsEx(Object.assign({}, courseBase, { weeks: '5' }), hOpts);
+  eq('整段都在假期则不生成事件', hAll.lines.length, 0);
+  eq('记为「因放假跳过」而非「无法识别」', hAll.holidaySkipped, 1);
+
+  /* --- 单双周段同样避假 --- */
+  const hOdd = buildEventsEx(Object.assign({}, courseBase, { weeks: '1-8单' }), hOpts);
+  const hOddText = hOdd.lines.join('\n');
+  ok('单周段里的放假周被剔除', hOddText.indexOf('EXDATE:20261005T000000Z') !== -1);
+  ok('单周段保留 INTERVAL=2', hOddText.indexOf('INTERVAL=2;UNTIL=') !== -1);
+
+  /* --- 整份 ICS 的统计与跳过原因 --- */
+  const hIcs = buildIcs({
+    courses: [
+      Object.assign({}, courseBase, { id: 'c1', weeks: '1-8' }),
+      Object.assign({}, courseBase, { id: 'c2', weeks: '1-8', day_of_week: 6 }),
+      Object.assign({}, courseBase, { id: 'c3', weeks: '5' })
+    ],
+    termStartMonday: '2026-09-07',
+    holidayIndex: hIdx,
+    now: new Date(Date.UTC(2026, 9, 12))
+  });
+  eq('ICS 事件数（全假的课不进）', hIcs.eventCount, 2);
+  eq('ICS 剔除总数', hIcs.exdateCount, 1);
+  eq('跳过的课记了原因', hIcs.skipped.length, 1);
+  ok('跳过原因写的是假期而不是「无法识别」',
+    hIcs.skipped[0].reason.indexOf('假期') !== -1, hIcs.skipped[0].reason);
+  ok('生成的 ICS 里 EXDATE 行被正确折行',
+    hIcs.ics.split('\r\n').every(function (l) {
+      return Buffer.byteLength(l, 'utf8') <= 75;
+    }));
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

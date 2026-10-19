@@ -150,20 +150,37 @@ function makeUid(course, segIndex) {
  * @returns {string[]}
  */
 function buildEvents(course, opts) {
+  return buildEventsEx(course, opts).lines;
+}
+
+/**
+ * 同 buildEvents，额外返回「因放假被整段剔除」的段数，供调用方给出准确原因
+ *
+ * 为什么要区分：日历 App 不看我们的免打扰判定，放假当天照样响铃。
+ * 唯一让它闭嘴的办法是**那天根本没有这个事件**，所以避假必须做在生成侧。
+ *
+ * @returns {{lines: string[], holidaySkipped: number, exdateCount: number}}
+ */
+function buildEventsEx(course, opts) {
   const o = opts || {};
   const c = course || {};
   const weeks = parseWeeks(c.weeks);
-  if (!weeks.length) return [];
+  if (!weeks.length) return { lines: [], holidaySkipped: 0, exdateCount: 0 };
 
   const dayOfWeek = Number(c.day_of_week);
   const startSlot = Number(c.start_slot);
-  if (!(dayOfWeek >= 1 && dayOfWeek <= 7) || !startSlot) return [];
+  if (!(dayOfWeek >= 1 && dayOfWeek <= 7) || !startSlot) {
+    return { lines: [], holidaySkipped: 0, exdateCount: 0 };
+  }
 
   const range = getRangeTime(startSlot, Number(c.slot_count) || 1, o.schedule);
-  if (!range) return [];
+  if (!range) return { lines: [], holidaySkipped: 0, exdateCount: 0 };
 
   const lines = [];
   const lead = Number(o.leadMinutes || 0);
+  const holidayIndex = o.holidayIndex || null;
+  let holidaySkipped = 0;
+  let exdateCount = 0;
 
   splitSegments(weeks).forEach((seg, idx) => {
     const firstWeek = seg.weeks[0];
@@ -172,14 +189,47 @@ function buildEvents(course, opts) {
     const dtEnd = toIcsUtc(dateStr, range.end);
     if (!dtStart || !dtEnd) return;
 
+    /**
+     * 法定节假日不上课 → 用 EXDATE 把这些日期从重复事件里剔除。
+     * 只剔 holiday，不剔 makeup —— 调休上班日该上的课照常。
+     */
+    const exdates = [];
+    if (holidayIndex) {
+      for (const w of seg.weeks) {
+        const d = weekToDateStr(o.termStartMonday, w, dayOfWeek);
+        if (holidayIndex[d] !== 'holiday') continue;
+        const ex = toIcsUtc(d, range.start);
+        if (ex) exdates.push(ex);
+      }
+      // 这一段的每一次上课都落在假期里 → 整段不生成
+      if (exdates.length && exdates.length === seg.weeks.length) {
+        holidaySkipped += 1;
+        return;
+      }
+    }
+    exdateCount += exdates.length;
+
     lines.push('BEGIN:VEVENT');
     lines.push(`UID:${makeUid(c, idx)}`);
     lines.push(`DTSTAMP:${o.dtStamp}`);
     lines.push(`DTSTART:${dtStart}`);
     lines.push(`DTEND:${dtEnd}`);
     if (seg.weeks.length >= 2) {
-      lines.push(`RRULE:FREQ=WEEKLY;INTERVAL=${seg.interval};COUNT=${seg.weeks.length}`);
+      /**
+       * ⚠️ 有 EXDATE 时改用 UNTIL、不用 COUNT。
+       * RFC 5545 规定 COUNT 计数的是 RRULE 展开的实例数、EXDATE 之后剔除，
+       * 但各家客户端实现并不统一：若某客户端先剔除再计数，末周的课就会被截断。
+       * UNTIL 只划定时间上界，展开结果不受剔除影响，恒等于「到末周为止的每一周」。
+       */
+      if (exdates.length) {
+        const lastWeek = seg.weeks[seg.weeks.length - 1];
+        const until = toIcsUtc(weekToDateStr(o.termStartMonday, lastWeek, dayOfWeek), range.end);
+        lines.push(`RRULE:FREQ=WEEKLY;INTERVAL=${seg.interval};UNTIL=${until}`);
+      } else {
+        lines.push(`RRULE:FREQ=WEEKLY;INTERVAL=${seg.interval};COUNT=${seg.weeks.length}`);
+      }
     }
+    if (exdates.length) lines.push(`EXDATE:${exdates.join(',')}`);
     lines.push(`SUMMARY:${escapeText(c.name || '上课')}`);
     if (c.location) lines.push(`LOCATION:${escapeText(c.location)}`);
 
@@ -209,7 +259,7 @@ function buildEvents(course, opts) {
     lines.push('END:VEVENT');
   });
 
-  return lines;
+  return { lines, holidaySkipped, exdateCount };
 }
 
 /** 周次数组的紧凑写法：[1,2,3,5] → "1-3,5" */
@@ -240,9 +290,11 @@ function formatWeeks(weeks) {
  * @param {number} [opts.leadMinutes=15]     提前提醒分钟数（0 = 不设闹钟）
  * @param {Array}  [opts.silentCourses]      已静音的课程 id（不写进日历）
  * @param {object} [opts.schedule]           作息配置，缺省用内置默认
+ * @param {object} [opts.holidayIndex]       节假日索引 {'YYYY-MM-DD': 'holiday'|'makeup'}，
+ *                                           放假当天的课用 EXDATE 剔除；不传则不避假
  * @param {string} [opts.calendarName='课小伴课表']
  * @param {Date}   [opts.now]                生成时间（DTSTAMP），便于测试固定
- * @returns {{ics: string, eventCount: number, skipped: Array}}
+ * @returns {{ics: string, eventCount: number, exdateCount: number, skipped: Array}}
  */
 function buildIcs(opts) {
   const o = opts || {};
@@ -253,6 +305,7 @@ function buildIcs(opts) {
   const body = [];
   const skipped = [];
   let eventCount = 0;
+  let exdateCount = 0;
 
   for (const c of o.courses || []) {
     if (!c) continue;
@@ -260,18 +313,23 @@ function buildIcs(opts) {
       skipped.push({ name: c.name, reason: '这门课已单独关闭提醒' });
       continue;
     }
-    const lines = buildEvents(c, {
+    const r = buildEventsEx(c, {
       termStartMonday: o.termStartMonday,
       schedule: o.schedule,
       leadMinutes: o.leadMinutes == null ? 15 : o.leadMinutes,
-      dtStamp
+      dtStamp,
+      holidayIndex: o.holidayIndex
     });
-    if (!lines.length) {
-      skipped.push({ name: c.name, reason: '周次或节次无法识别' });
+    if (!r.lines.length) {
+      skipped.push({
+        name: c.name,
+        reason: r.holidaySkipped ? '这门课的上课日都在假期里' : '周次或节次无法识别'
+      });
       continue;
     }
-    body.push(...lines);
-    eventCount += lines.filter((l) => l === 'BEGIN:VEVENT').length;
+    body.push(...r.lines);
+    eventCount += r.lines.filter((l) => l === 'BEGIN:VEVENT').length;
+    exdateCount += r.exdateCount;
   }
 
   const head = [
@@ -290,6 +348,7 @@ function buildIcs(opts) {
   return {
     ics: all.map(foldLine).join('\r\n') + '\r\n',
     eventCount,
+    exdateCount,
     skipped
   };
 }
@@ -297,6 +356,7 @@ function buildIcs(opts) {
 module.exports = {
   buildIcs,
   buildEvents,
+  buildEventsEx,
   splitSegments,
   escapeText,
   foldLine,

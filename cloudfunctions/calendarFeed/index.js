@@ -34,6 +34,7 @@ const _ = db.command;
 const PROFILES = 'profiles';
 const TIMETABLES = 'timetables';
 const COURSES = 'courses';
+const HOLIDAYS = 'holidays';
 
 /**
  * HTTP 访问服务的域名前缀
@@ -100,6 +101,41 @@ async function fetchAll(query) {
     skip += rows.length;
   }
   return out;
+}
+
+/**
+ * 节假日索引 {'YYYY-MM-DD': 'holiday' | 'makeup'}
+ *
+ * 为什么订阅源也要避假：日历 App 完全不看小程序里的免打扰判定，放假当天照样响铃。
+ * 唯一让它闭嘴的办法是那天根本没有事件 —— 所以避假必须做在 ICS 生成侧（EXDATE）。
+ *
+ * 三层兜底，任何一层失败都不影响订阅源可用：
+ *   1. 内置种子（holiday-data.js）—— holidays 集合没建 / 读不到时仍能避假
+ *   2. 云端 holidays 集合 —— 按日期覆盖内置，学校校历、新一年的安排都能生效
+ *   3. 读库抛错 —— 静默降级内置表，绝不让订阅源因为假期数据挂掉
+ */
+async function loadHolidayIndex() {
+  const idx = {};
+
+  try {
+    const seed = require('./holiday-data').SEED_RECORDS || [];
+    for (const r of seed) {
+      if (r && r.date) idx[r.date] = r.type === 'makeup' ? 'makeup' : 'holiday';
+    }
+  } catch (e) {
+    // 种子文件缺失不该致命
+  }
+
+  try {
+    const rows = await fetchAll(db.collection(HOLIDAYS));
+    for (const r of rows) {
+      if (r && r.date) idx[r.date] = r.type === 'makeup' ? 'makeup' : 'holiday';
+    }
+  } catch (e) {
+    console.warn('[calendarFeed] holidays 读取失败，改用内置节假日表', e && e.message);
+  }
+
+  return idx;
 }
 
 function feedUrl(token) {
@@ -263,12 +299,14 @@ async function handleHttp(event) {
   const feed = profile.calendar_feed || {};
   const { buildIcs } = loadLib().ics;
   const { DEFAULT_SCHEDULE } = loadLib().schedule;
+  const holidayIndex = await loadHolidayIndex();
   const result = buildIcs({
     courses: courses || [],
     termStartMonday: current.term_start_monday,
     leadMinutes: Number.isFinite(Number(feed.leadMinutes)) ? Number(feed.leadMinutes) : 15,
     silentCourses: Array.isArray(feed.silentCourses) ? feed.silentCourses : [],
     schedule: feed.schedule || DEFAULT_SCHEDULE,
+    holidayIndex,
     calendarName: current.name ? `${current.name} · 课小伴` : '课小伴课表'
   });
 
@@ -277,7 +315,10 @@ async function handleHttp(event) {
     headers: {
       'Content-Type': 'text/calendar; charset=utf-8',
       'Content-Disposition': 'attachment; filename="kexiaoban.ics"',
-      'Cache-Control': 'no-cache'
+      'Cache-Control': 'no-cache',
+      // 便于排查「课表少了/多了」：不用下载 ICS 也能看到事件数与放假剔除数
+      'X-Event-Count': String(result.eventCount),
+      'X-Holiday-Excluded': String(result.exdateCount || 0)
     },
     body: result.ics
   };
