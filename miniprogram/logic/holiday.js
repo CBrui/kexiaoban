@@ -20,6 +20,8 @@
  *   这样学校校历的自定义补课日、以及内置表过期后的新数据都能生效。
  */
 
+const { weekToDate, formatDate } = require('../utils/week');
+
 const CACHE_KEY = 'holiday_cache';
 /** 云端数据的缓存有效期：6 小时。过期后会尝试刷新，失败也不影响使用 */
 const CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -281,6 +283,61 @@ function toIndex(records) {
 }
 
 /**
+ * 带名称的索引（{ 'YYYY-MM-DD': {type, name} }）
+ *
+ * 课表页要在日期表头上标出「这天是国庆」，光有 type 不够，所以另给一份带名字的。
+ * toIndex 保持原样不动 —— 它是 dnd-rule / calendar-sync 的数据契约，不能改结构。
+ *
+ * @param {Array} records
+ */
+function toDetailMap(records) {
+  const map = {};
+  (records || []).forEach((r) => {
+    const n = normalize(r);
+    if (n) map[n.date] = { type: n.type, name: n.name || '' };
+  });
+  return map;
+}
+
+/**
+ * 某一周 7 天各自的节假日类型（供课表页把假期列标灰）
+ *
+ * @param {object} index  toIndex / toDetailMap 产出的索引
+ * @param {string} termStartMonday  第 1 周周一 'YYYY-MM-DD'
+ * @param {number} week   周次
+ * @returns {Array<string>} 下标 0 = 周一，值为 '' | 'holiday' | 'makeup'
+ */
+function dayTypesOf(index, termStartMonday, week) {
+  const out = [];
+  const idx = index || {};
+  for (let d = 1; d <= 7; d++) {
+    // ⚠️ weekToDate 返回的是 **Date 对象**，查字符串索引前必须 formatDate
+    const key = formatDate(weekToDate(termStartMonday, week, d));
+    const hit = idx[key];
+    const type = typeof hit === 'string' ? hit : (hit && hit.type);
+    out.push(type === 'holiday' || type === 'makeup' ? type : '');
+  }
+  return out;
+}
+
+/**
+ * 日期表头上的小标记文字
+ * 放假优先显示假期名（「国庆」比「休」好认）；调休上班日标「班」
+ *
+ * @returns {string} '' 表示普通日
+ */
+function dayMarkText(index, dateStr) {
+  const idx = index || {};
+  const hit = idx[dateStr];
+  if (!hit) return '';
+  const type = typeof hit === 'string' ? hit : hit.type;
+  const name = typeof hit === 'string' ? '' : (hit.name || '');
+  if (type === 'holiday') return name || '休';
+  if (type === 'makeup') return '班';
+  return '';
+}
+
+/**
  * 把零散的日期合并成「假期段」，便于界面展示「国庆 10/1-10/7」
  * 只合并同 name 且日期连续的 holiday；makeup 不合并（它们本身是散点）
  *
@@ -353,6 +410,9 @@ module.exports = {
   normalize,
   mergeRecords,
   toIndex,
+  toDetailMap,
+  dayTypesOf,
+  dayMarkText,
   groupHolidays,
   upcoming,
   nextDate,

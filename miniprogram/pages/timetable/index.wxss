@@ -173,6 +173,52 @@
   margin-top: 2rpx;
 }
 
+/* ---------- 节假日标记 ---------- */
+
+/*
+ * 放假那天不上课，所以整列视觉上淡掉：表头文字置灰 + 课程卡半透明。
+ * 淡的是「这天没课」，不是课程有问题 —— 课表数据本身不动。
+ *
+ * 这里刻意用半透明而不是硬编码灰色：课程卡自带 12 色调色板的底色，
+ * 写死灰色会把配色糊掉；opacity 能保留色相，只是压低存在感。
+ */
+.day-head-holiday .day-name,
+.day-head-holiday .day-date {
+  opacity: 0.45;
+}
+
+.day-col-holiday {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.day-col-holiday .course-block {
+  opacity: 0.32;
+}
+
+/*
+ * 「今天」恰好放假时，保住今天的高亮底色 —— 否则用户会失去定位感。
+ * 只淡化上面的内容，底色仍然告诉用户「这是今天」。
+ */
+.day-head-today.day-head-holiday,
+.day-col-today.day-col-holiday {
+  background: var(--color-primary-soft);
+}
+
+/* 表头小字：放假显示假期名（国庆），调休上班显示「班」 */
+.day-mark {
+  font-size: 16rpx;
+  line-height: 1.1;
+  margin-top: 2rpx;
+  transform: scale(0.9);
+  color: var(--color-text-tertiary);
+}
+
+/* 调休上班日照常上课，因此**不淡化**，只标一个「班」提醒这天按工作日处理 */
+.day-mark-makeup {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
 /* ---------- 主体 ---------- */
 .grid-body {
   flex: 1;

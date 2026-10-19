@@ -2012,6 +2012,41 @@ const storeApi = require(path.join(M, 'api/store'));
     );
     eq('整门课落在节假日 → 不写事件', allHoliday.events.length, 0);
     ok('给出跳过原因', !!allHoliday.reason, allHoliday.reason);
+
+    /* ---- 课表页「假期列标灰」用的两个函数 ---- */
+    const detailMap = holiday.toDetailMap(builtin);
+    eq('带名称索引条数与记录一致', Object.keys(detailMap).length, builtin.length);
+    ok('索引带假期名', detailMap['2026-10-01'].name === '国庆节', detailMap['2026-10-01'].name);
+    eq('索引带类型', detailMap['2026-10-10'].type, 'makeup');
+
+    // 第 4 周 = 09-28(周一) ~ 10-04(周日)，其中 10-01~10-04 落在国庆假期
+    const types4 = holiday.dayTypesOf(detailMap, '2026-09-07', 4);
+    eq('一周固定返回 7 天', types4.length, 7);
+    eq('第 4 周周一 09-28 是普通日', types4[0], '');
+    eq('第 4 周周四 10-01 是放假', types4[3], 'holiday');
+    eq('第 4 周周日 10-04 是放假', types4[6], 'holiday');
+    eq('第 4 周放假 4 天', types4.filter((t) => t === 'holiday').length, 4);
+
+    const types5 = holiday.dayTypesOf(detailMap, '2026-09-07', 5);
+    eq('第 5 周周一 10-05 是放假', types5[0], 'holiday');
+    eq('第 5 周周六 10-10 是调休上班', types5[5], 'makeup');
+    eq('第 5 周放假 3 天', types5.filter((t) => t === 'holiday').length, 3);
+
+    // 边界：空索引 / 不传索引 / 学期外的周次都不能崩，且一律按普通日处理
+    eq('空索引全为普通日', holiday.dayTypesOf({}, '2026-09-07', 4).join(''), '');
+    eq('不传索引仍返回 7 天', holiday.dayTypesOf(null, '2026-09-07', 1).length, 7);
+    eq('学期外的周次不误判', holiday.dayTypesOf(detailMap, '2026-09-07', 99).join(''), '');
+
+    /* ---- 表头小字 ---- */
+    eq('放假显示假期名（比「休」好认）', holiday.dayMarkText(detailMap, '2026-10-01'), '国庆节');
+    eq('调休上班显示「班」', holiday.dayMarkText(detailMap, '2026-10-10'), '班');
+    eq('普通日没有标记', holiday.dayMarkText(detailMap, '2026-10-08'), '');
+
+    // toIndex（只有 type 字符串）产出的索引也要能用，页面两种都得吃
+    const plainIdx = holiday.toIndex(builtin);
+    eq('纯 type 索引也能标「班」', holiday.dayMarkText(plainIdx, '2026-10-10'), '班');
+    eq('纯 type 索引放假兜底为「休」', holiday.dayMarkText(plainIdx, '2026-10-01'), '休');
+    eq('纯 type 索引也能算周内类型', holiday.dayTypesOf(plainIdx, '2026-09-07', 4)[3], 'holiday');
   }
 
   /* ============ 汇总 ============ */
