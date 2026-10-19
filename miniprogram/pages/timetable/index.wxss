@@ -47,19 +47,6 @@
   margin: 0 auto;
 }
 
-/* 深色模式覆盖：错误条底色、休息时段灰块 */
-@media (prefers-color-scheme: dark) {
-  .error-bar {
-    color: #ff8a8a;
-    background: #3d1a1a;
-  }
-
-  .slot-break,
-  .break-cell {
-    background: #2a2c30;
-  }
-}
-
 /* ---------- 网格容器 ---------- */
 .grid-wrap {
   flex: 1;
@@ -644,4 +631,39 @@
   color: var(--color-text-tertiary);
   margin-top: 10rpx;
   line-height: 1.5;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * 深色模式覆盖
+ *
+ * ⚠️ 必须放在文件**末尾**：CSS 同特异性时后定义的胜出，媒体查询不提升特异性。
+ * 曾把这块放在文件开头（第 51 行），被后面 .slot-break（234 行）、
+ * .break-cell（328 行）的浅色值盖掉 —— 表现为「午休 / 晚修分隔带在深色下仍是白块」。
+ * 新增深色规则一律追加到这里，不要插到文件中间。
+ * ---------------------------------------------------------------------------
+ */
+@media (prefers-color-scheme: dark) {
+  /* 顶部错误条 */
+  .error-bar {
+    background: #3d1a1a;
+    color: #ff8a8a;
+  }
+
+  /* 午休 / 晚修分隔带（节次列 + 网格内单元格）*/
+  .slot-break,
+  .break-cell {
+    background: #2a2c30;
+  }
+
+  /* 「午休 / 晚修」字样压在深灰底上，三级灰太暗，提一档 */
+  .slot-break-label {
+    color: #a0a5ac;
+  }
+
+  /* 课程详情里的「删除」按钮：浅色下是浅红底红字，深色下必须整块压暗 */
+  .detail-btn-danger {
+    background: #3d1a1a;
+    color: #ff8a8a;
+  }
 }
