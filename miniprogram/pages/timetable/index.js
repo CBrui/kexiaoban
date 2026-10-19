@@ -28,6 +28,7 @@ const { colorOf, softOf, buildColorMap } = require('../../utils/color');
 const { buildSlotAxis, formatSlotTime, getTotalSlots, toMinutes } = require('../../utils/schedule');
 const { listCourses, removeCourse, updateCourse } = require('../../api/course');
 const timetableApi = require('../../api/timetable');
+const holiday = require('../../logic/holiday');
 const config = require('../../config');
 
 const app = getApp();
@@ -68,9 +69,13 @@ Page({
     slotAxis: [],
     totalSlots: 6,
 
+    // 节假日索引 {'YYYY-MM-DD': {type, name}}，用于把假期列标灰。
+    // 只参与面板计算、不直接渲染，因此不走 setData（见 loadHolidayMarks）
+    holidayMap: {},
+
     /**
      * 滑动轨道：并排的「上一周 / 本周 / 下一周」面板。
-     *   panels     每个面板含 { week, parity, dayDates, dayIsToday, isTodayWeek, grid }
+     *   panels     每个面板含 { week, parity, dayDates, dayIsToday, dayTypes, dayMarks, isTodayWeek, grid }
      *   trackIndex 当前周在 panels 中的下标
      *   trackPct   轨道横向位移（百分比，100% = 一个面板宽度）
      *   animate    是否启用过渡动画（拖动中关闭，松手后开启）
@@ -122,6 +127,7 @@ Page({
 
     app.whenReady(async () => {
       await this.loadCurrentTimetable();
+      this.loadHolidayMarks();
       const pos = this.todayPos();
       this.setData({
         currentWeek: pos.week,
@@ -611,6 +617,29 @@ Page({
   },
 
   /**
+   * 节假日标记：先把缓存 / 内置表同步装上，再去云端刷新一次。
+   *
+   * 为什么分两步：课表页是首页，不能等网络。先用已有数据把假期列标灰，
+   * 云端数据回来后再重建一次（多数情况下两次结果一致，看不出变化）。
+   * holidayMap 只参与面板计算、不直接渲染，所以直接写 this.data 即可。
+   */
+  loadHolidayMarks() {
+    const cal = holiday.loadCalendar();
+    this.data.holidayMap = holiday.toDetailMap(cal.records);
+
+    holiday
+      .refresh()
+      .then((r) => {
+        if (!r || !Array.isArray(r.records)) return;
+        this.data.holidayMap = holiday.toDetailMap(r.records);
+        this.renderTrack();
+      })
+      .catch(() => {
+        /* 刷新失败就继续用内置表，不影响假期列标记 */
+      });
+  },
+
+  /**
    * 计算某周每天对应的日期文本（如 9月7日）
    */
   computeDayDates(week) {
@@ -699,14 +728,31 @@ Page({
    * 组装一个周面板（网格 + 日期表头 + 今天标记）
    */
   buildPanel(week) {
+    const dayTypes = holiday.dayTypesOf(
+      this.data.holidayMap,
+      this.data.termStartMonday,
+      week
+    );
+    // 表头小字：放假显示假期名（「国庆」比「休」好认），调休上班标「班」
+    const dayMarks = dayTypes.map((t, i) =>
+      t ? holiday.dayMarkText(this.data.holidayMap, this.dateKeyOf(week, i + 1)) : ''
+    );
+
     return {
       week,
       parity: week % 2 === 1 ? '单' : '双',
       dayDates: this.computeDayDates(week),
       dayIsToday: this.computeDayIsToday(week),
+      dayTypes,
+      dayMarks,
       isTodayWeek: this.data.inTerm && week === this.data.todayWeek,
       grid: this.buildGridForWeek(week)
     };
+  },
+
+  /** 第 week 周第 dayOfWeek 天的 'YYYY-MM-DD' */
+  dateKeyOf(week, dayOfWeek) {
+    return formatDate(weekToDate(this.data.termStartMonday, week, dayOfWeek));
   },
 
   /**

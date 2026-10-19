@@ -1778,8 +1778,13 @@ const storeApi = require(path.join(M, 'api/store'));
     { id: 'c3', name: '英语', day_of_week: 5, start_slot: 5, weeks: '1-8,10-16' },
     calCtx
   );
-  eq('跳跃周次拆成单条事件', calJump.events.length, 15);
-  eq('跳跃段也标记为 single', calJump.events[0].kind, 'single');
+  // 1-8,10-16 = 两段连续周次 → 2 条「每周重复」。
+  // 旧实现是一股脑拆成 15 条单条事件，节假日打断学期后会更夸张（十几条）；
+  // 按段分组后事件数从 O(周数) 降到 O(段数)。
+  eq('跳跃周次按连续段分组（2 段 → 2 条）', calJump.events.length, 2);
+  eq('跳跃段用重复事件表达', calJump.events[0].kind, 'repeat');
+  eq('第一段覆盖 1-8 周', calJump.events[0]._weeks, '1-8');
+  eq('第二段覆盖 10-16 周', calJump.events[1]._weeks, '10-16');
 
   // 已上完的课：参照时间放到学期结束后，应整门跳过而不是写出一堆过去事件
   const calPast = calendarSync.planCourse(
@@ -1860,6 +1865,189 @@ const storeApi = require(path.join(M, 'api/store'));
   const rNone2 = summarizeSyncResult(0, [{ title: 'A', err: 'auth denied' }]);
   ok('权限失败提示查权限', rNone2.text.indexOf('权限') !== -1);
   ok('无成功无失败 → 空文案', summarizeSyncResult(0, []).text === '');
+
+  /* ============ 【56】节假日表：内置默认 + 云端下发覆盖 ============ */
+  group('【56】节假日表 holiday —— 内置默认表 + 云端下发');
+  {
+    const holiday = require(path.join(M, 'logic/holiday'));
+    const calendarSync56 = require(path.join(M, 'logic/calendar-sync'));
+
+    /* ---- 内置表完整性：数字钉死，防止改数据时漏删漏加 ---- */
+    const builtin = holiday.BUILTIN_RECORDS;
+    eq('内置表总条数 40', builtin.length, 40);
+    eq('其中法定节假日 34 天', builtin.filter((r) => r.type === 'holiday').length, 34);
+    eq('其中调休上班 6 天', builtin.filter((r) => r.type === 'makeup').length, 6);
+    // 2027 年只收录元旦：1 月 1 日是法定节日，不依赖每年调休通知；
+    // 其余 2027 年假期等国办通知出来后由云端下发，不在这里猜测
+    eq('含 2027 年元旦', builtin.filter((r) => r.date === '2027-01-01').length, 1);
+    eq('2027 年只有元旦一条', builtin.filter((r) => r.date >= '2027-01-01').length, 1);
+    ok('全部日期格式合法', builtin.every((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date)));
+    ok('无重复日期', new Set(builtin.map((r) => r.date)).size === builtin.length);
+    ok('全部带名称', builtin.every((r) => !!r.name));
+
+    // 各假期天数（国务院口径）
+    const countOf = (name, type) =>
+      builtin.filter((r) => r.name === name && (!type || r.type === type)).length;
+    eq('2026 元旦放假 3 天', builtin.filter((r) => r.name === '元旦' && r.type === 'holiday' && r.date < '2027-01-01').length, 3);
+    eq('2027 元旦放假 1 天', builtin.filter((r) => r.date === '2027-01-01').length, 1);
+    eq('春节放假 9 天', countOf('春节', 'holiday'), 9);
+    eq('清明放假 3 天', countOf('清明节', 'holiday'), 3);
+    eq('劳动节放假 5 天', countOf('劳动节', 'holiday'), 5);
+    eq('端午放假 3 天', countOf('端午节', 'holiday'), 3);
+    eq('中秋放假 3 天', countOf('中秋节', 'holiday'), 3);
+    eq('国庆放假 7 天', countOf('国庆节', 'holiday'), 7);
+
+    /* ---- normalize：脏数据不得污染索引 ---- */
+    eq('缺字段 → null', holiday.normalize(null), null);
+    eq('日期格式不对 → null', holiday.normalize({ date: '2026/10/01', type: 'holiday' }), null);
+    eq('未知 type 归为 holiday', holiday.normalize({ date: '2026-10-01', type: 'xxx' }).type, 'holiday');
+    eq('缺名称时补默认名', holiday.normalize({ date: '2026-10-01', type: 'makeup' }).name, '调休');
+
+    /* ---- mergeRecords：云端覆盖内置（同一日期以云端为准）---- */
+    const merged = holiday.mergeRecords(
+      [{ date: '2026-10-01', type: 'holiday', name: '国庆节' }],
+      [{ date: '2026-10-01', type: 'makeup', name: '学校补课' }]
+    );
+    eq('合并后仍是一条（按日期去重）', merged.length, 1);
+    eq('云端覆盖内置的类型', merged[0].type, 'makeup');
+    eq('云端覆盖内置的名称', merged[0].name, '学校补课');
+
+    // 云端可以新增内置表没有的日期（如 2027 年安排公布后）
+    const added = holiday.mergeRecords(
+      [{ date: '2026-10-01', type: 'holiday' }],
+      [{ date: '2027-01-01', type: 'holiday', name: '元旦' }]
+    );
+    eq('云端可补充新日期', added.length, 2);
+    eq('合并结果按日期升序', added[0].date, '2026-10-01');
+    ok('脏数据不进合并结果', holiday.mergeRecords([{ date: 'x' }], []).length === 0);
+
+    /* ---- toIndex ---- */
+    const idx = holiday.toIndex(builtin);
+    eq('索引条数与记录一致', Object.keys(idx).length, 40);
+    eq('国庆首日是 holiday', idx['2026-10-01'], 'holiday');
+    eq('国庆调休上班是 makeup', idx['2026-10-10'], 'makeup');
+    eq('非节假日日期不在索引中', idx['2026-10-19'], undefined);
+
+    /* ---- groupHolidays：连续日期合并成假期段 ---- */
+    const groups = holiday.groupHolidays(builtin);
+    const gq = groups.find((g) => g.name === '国庆节');
+    ok('国庆被合成一段', !!gq);
+    eq('国庆段起点 10-01', gq.start, '2026-10-01');
+    eq('国庆段终点 10-07', gq.end, '2026-10-07');
+    eq('国庆段 7 天', gq.days, 7);
+    // 春节：2/15-2/23 连续 9 天
+    const gc = groups.find((g) => g.name === '春节');
+    eq('春节段 9 天', gc.days, 9);
+    eq('春节段起点 02-15', gc.start, '2026-02-15');
+    // 名称不同不合并：中秋 9/27 与国庆 10/1 中间隔着 9/28-9/30，本来就不连续
+    const gm = groups.find((g) => g.name === '中秋节');
+    eq('中秋段 3 天', gm.days, 3);
+
+    /* ---- upcoming：只看还没到的 ---- */
+    const up = holiday.upcoming(builtin, '2026-10-19', 5);
+    ok('已过去的假期不出现在待办里', up.every((g) => g.end >= '2026-10-19'));
+    const upEarly = holiday.upcoming(builtin, '2026-01-10', 2);
+    ok('年初能看到春节', upEarly.some((g) => g.name === '春节'));
+
+    /* ---- nextDate：跨月跨年边界 ---- */
+    eq('跨月 +1 天', holiday.nextDate('2026-01-31'), '2026-02-01');
+    eq('跨年 +1 天', holiday.nextDate('2026-12-31'), '2027-01-01');
+    eq('闰年 2 月末', holiday.nextDate('2028-02-28'), '2028-02-29');
+    eq('平年 2 月末', holiday.nextDate('2026-02-28'), '2026-03-01');
+
+    /* ---- 降级：云不可用时用内置表，绝不抛错 ---- */
+    global.wx.cloud = null;
+    const local = holiday.loadCalendar();
+    eq('缓存为空时回退内置表', local.source, 'builtin');
+    eq('内置表也能给出 40 条', local.records.length, 40);
+    const refreshed = await holiday.refresh(true);
+    ok('云端不可用时不抛错', !!refreshed);
+    ok('云端不可用时给出错误说明', !!refreshed.error, refreshed.error);
+    ok('云端不可用时仍有数据可用', refreshed.records.length >= 40);
+    eq('来源文案提示已降级', holiday.sourceText(refreshed.source, refreshed.error), '云端不可用，已用内置表');
+
+    /* ---- 日历写入避假：放假当天不该出现在日历里 ---- */
+    const termStart = '2026-09-07';
+    const ctx56 = {
+      termStartMonday: termStart,
+      leadMinutes: 15,
+      rangeTime: () => ({ start: '08:00', end: '09:35' }),
+      now: new Date(2026, 8, 7, 0, 0, 0),
+      excludePast: false
+    };
+    // 周四（day_of_week=4）第 1 节的课：10/1 是周四，撞国庆
+    const hitHoliday = calendarSync56.planCourse(
+      { id: 'h1', name: '线性代数', day_of_week: 4, start_slot: 1, weeks: '1-8' },
+      { ...ctx56, holidayIndex: idx }
+    );
+    ok('撞节假日的课被剔除后仍有事件', hitHoliday.events.length > 0, JSON.stringify(hitHoliday.reason || ''));
+    ok('返回了被跳过的节假日列表', (hitHoliday.skippedHolidays || []).indexOf('2026-10-01') !== -1,
+      JSON.stringify(hitHoliday.skippedHolidays));
+    // 国庆横跨第 4、5 周（9/7 起算：第 4 周周四 = 10/1，第 5 周周四 = 10/8）
+    // 剔除 10/1 后 1-8 周被切成两段 → 2 条重复事件
+    eq('节假日把学期切成两段', hitHoliday.events.length, 2);
+    eq('第一段 1-3 周', hitHoliday.events[0]._weeks, '1-3');
+    eq('第二段 5-8 周', hitHoliday.events[1]._weeks, '5-8');
+
+    // 不传 holidayIndex 时行为不变（向后兼容）
+    const noIdx = calendarSync56.planCourse(
+      { id: 'h1', name: '线性代数', day_of_week: 4, start_slot: 1, weeks: '1-8' },
+      ctx56
+    );
+    eq('不传节假日索引时仍是完整一段', noIdx.events.length, 1);
+    eq('不传节假日索引时覆盖 1-8 周', noIdx.events[0]._weeks, '1-8');
+
+    // makeup 日期不剔除：调休上班日照常上课
+    const makeupIdx = { '2026-10-10': 'makeup' };
+    const withMakeup = calendarSync56.planCourse(
+      { id: 'h2', name: '英语', day_of_week: 6, start_slot: 1, weeks: '1-8' },
+      { ...ctx56, holidayIndex: makeupIdx }
+    );
+    eq('调休上班日不跳过（仍是一整段）', withMakeup.events.length, 1);
+
+    // 整门课都落在节假日 → 跳过并给出原因
+    const allHoliday = calendarSync56.planCourse(
+      { id: 'h3', name: '只放假那天有课', day_of_week: 4, start_slot: 1, weeks: '4' },
+      { ...ctx56, holidayIndex: idx }
+    );
+    eq('整门课落在节假日 → 不写事件', allHoliday.events.length, 0);
+    ok('给出跳过原因', !!allHoliday.reason, allHoliday.reason);
+
+    /* ---- 课表页「假期列标灰」用的两个函数 ---- */
+    const detailMap = holiday.toDetailMap(builtin);
+    eq('带名称索引条数与记录一致', Object.keys(detailMap).length, builtin.length);
+    ok('索引带假期名', detailMap['2026-10-01'].name === '国庆节', detailMap['2026-10-01'].name);
+    eq('索引带类型', detailMap['2026-10-10'].type, 'makeup');
+
+    // 第 4 周 = 09-28(周一) ~ 10-04(周日)，其中 10-01~10-04 落在国庆假期
+    const types4 = holiday.dayTypesOf(detailMap, '2026-09-07', 4);
+    eq('一周固定返回 7 天', types4.length, 7);
+    eq('第 4 周周一 09-28 是普通日', types4[0], '');
+    eq('第 4 周周四 10-01 是放假', types4[3], 'holiday');
+    eq('第 4 周周日 10-04 是放假', types4[6], 'holiday');
+    eq('第 4 周放假 4 天', types4.filter((t) => t === 'holiday').length, 4);
+
+    const types5 = holiday.dayTypesOf(detailMap, '2026-09-07', 5);
+    eq('第 5 周周一 10-05 是放假', types5[0], 'holiday');
+    eq('第 5 周周六 10-10 是调休上班', types5[5], 'makeup');
+    eq('第 5 周放假 3 天', types5.filter((t) => t === 'holiday').length, 3);
+
+    // 边界：空索引 / 不传索引 / 学期外的周次都不能崩，且一律按普通日处理
+    eq('空索引全为普通日', holiday.dayTypesOf({}, '2026-09-07', 4).join(''), '');
+    eq('不传索引仍返回 7 天', holiday.dayTypesOf(null, '2026-09-07', 1).length, 7);
+    eq('学期外的周次不误判', holiday.dayTypesOf(detailMap, '2026-09-07', 99).join(''), '');
+
+    /* ---- 表头小字 ---- */
+    eq('放假显示假期名（比「休」好认）', holiday.dayMarkText(detailMap, '2026-10-01'), '国庆节');
+    eq('调休上班显示「班」', holiday.dayMarkText(detailMap, '2026-10-10'), '班');
+    eq('普通日没有标记', holiday.dayMarkText(detailMap, '2026-10-08'), '');
+
+    // toIndex（只有 type 字符串）产出的索引也要能用，页面两种都得吃
+    const plainIdx = holiday.toIndex(builtin);
+    eq('纯 type 索引也能标「班」', holiday.dayMarkText(plainIdx, '2026-10-10'), '班');
+    eq('纯 type 索引放假兜底为「休」', holiday.dayMarkText(plainIdx, '2026-10-01'), '休');
+    eq('纯 type 索引也能算周内类型', holiday.dayTypesOf(plainIdx, '2026-09-07', 4)[3], 'holiday');
+  }
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(52));

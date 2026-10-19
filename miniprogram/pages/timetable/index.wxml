@@ -50,11 +50,12 @@
               wx:for-item="dayName"
               wx:for-index="di"
               wx:key="*this"
-              class="day-head {{panel.dayIsToday[di] ? 'day-head-today' : ''}}"
+              class="day-head {{panel.dayIsToday[di] ? 'day-head-today' : ''}} {{panel.dayTypes[di] === 'holiday' ? 'day-head-holiday' : ''}} {{panel.dayTypes[di] === 'makeup' ? 'day-head-makeup' : ''}}"
             >
               <text class="day-name {{panel.dayIsToday[di] ? 'day-name-today' : ''}}">{{dayName}}</text>
               <text class="day-date {{panel.dayIsToday[di] ? 'day-date-today' : ''}}">{{panel.dayDates[di]}}</text>
-              <view wx:if="{{panel.dayIsToday[di]}}" class="day-dot"></view>
+              <text wx:if="{{panel.dayMarks[di]}}" class="day-mark {{panel.dayTypes[di] === 'makeup' ? 'day-mark-makeup' : ''}}">{{panel.dayMarks[di]}}</text>
+              <view wx:elif="{{panel.dayIsToday[di]}}" class="day-dot"></view>
             </view>
           </view>
         </view>
@@ -101,7 +102,7 @@
               wx:for-item="dayCol"
               wx:for-index="dayIdx"
               wx:key="dayIdx"
-              class="day-col {{panel.dayIsToday[dayIdx] ? 'day-col-today' : ''}}"
+              class="day-col {{panel.dayIsToday[dayIdx] ? 'day-col-today' : ''}} {{panel.dayTypes[dayIdx] === 'holiday' ? 'day-col-holiday' : ''}}"
             >
               <block wx:for="{{dayCol}}" wx:for-item="cell" wx:for-index="rowIdx" wx:key="rowIdx">
                 <!-- 休息分隔行 -->
